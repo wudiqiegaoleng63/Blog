@@ -1,0 +1,29 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build and test output
+/bin/
+/dist/
+/build/
+*.out
+*.test
+coverage/
+coverage*.txt
+coverage*.html
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+.cache/
+/tmp/

@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+Dockerfile*
+README*
+bin/
+build/
+dist/
+coverage/
+*.log
+*.out
+*.test
+.tmp/
+tmp/
