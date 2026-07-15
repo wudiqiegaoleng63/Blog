@@ -125,17 +125,28 @@ type JobsConfig struct {
 }
 
 type AIConfig struct {
-	Enabled   bool
-	Chat      ChatModelConfig
-	Embedding EmbeddingConfig
-	RAG       RAGConfig
+	// Enabled is the compatibility umbrella switch. Prefer the capability flags.
+	Enabled         bool
+	IndexingEnabled bool
+	RAGEnabled      bool
+	Chat            ChatModelConfig
+	Embedding       EmbeddingConfig
+	RAG             RAGConfig
+	Indexing        IndexingConfig
+}
+
+type IndexingConfig struct {
+	ChunkChars        int
+	ChunkOverlapChars int
 }
 
 type ChatModelConfig struct {
 	BaseURL string
 	APIKey  string
 	Model   string
-	// Timeout 是非流式 Chat 总超时；流式请见 StreamIdleTimeout。
+	// MaxTokens bounds one non-streaming answer.
+	MaxTokens int
+	// Timeout is the non-streaming Chat total timeout.
 	Timeout           time.Duration
 	StreamIdleTimeout time.Duration
 	// MaxRetries 仅在尚未向客户端发送内容时重试。
@@ -168,7 +179,8 @@ type RAGConfig struct {
 
 type MilvusConfig struct {
 	Addr            string
-	CollectionAlias string // 例如 blog_chunks_active
+	CollectionName  string
+	CollectionAlias string // optional stable alias for deployment switches
 	Username        string
 	Password        string
 	DialTimeout     time.Duration
@@ -199,6 +211,9 @@ func Load() (*Config, error) {
 		argon2Parallelism < 0 || argon2Parallelism > int(^uint8(0)) {
 		return nil, errors.New("Argon2 parameters exceed their supported integer ranges")
 	}
+
+	indexingEnabled := getbool("AI_INDEXING_ENABLED", getbool("AI_ENABLED", false))
+	ragEnabled := getbool("AI_RAG_ENABLED", getbool("AI_ENABLED", false))
 
 	c := &Config{
 		App: AppConfig{
@@ -268,11 +283,14 @@ func Load() (*Config, error) {
 			BatchSize:    getenvint("JOBS_BATCH_SIZE", 10),
 		},
 		AI: AIConfig{
-			Enabled: getbool("AI_ENABLED", false),
+			Enabled:         indexingEnabled || ragEnabled,
+			IndexingEnabled: indexingEnabled,
+			RAGEnabled:      ragEnabled,
 			Chat: ChatModelConfig{
 				BaseURL:           getenv("AI_CHAT_BASE_URL", ""),
 				APIKey:            getenv("AI_CHAT_API_KEY", ""),
 				Model:             getenv("AI_CHAT_MODEL", ""),
+				MaxTokens:         getenvint("AI_CHAT_MAX_TOKENS", 1200),
 				Timeout:           getdur("AI_CHAT_TIMEOUT", 90*time.Second),
 				StreamIdleTimeout: getdur("AI_CHAT_STREAM_IDLE_TIMEOUT", 45*time.Second),
 				MaxRetries:        getenvint("AI_CHAT_MAX_RETRIES", 2),
@@ -293,9 +311,14 @@ func Load() (*Config, error) {
 				ScoreThreshold:   getenvfloat("RAG_SCORE_THRESHOLD", 0.0),
 				MaxQuestionChars: getenvint("RAG_MAX_QUESTION_CHARS", 2000),
 			},
+			Indexing: IndexingConfig{
+				ChunkChars:        getenvint("AI_INDEX_CHUNK_CHARS", 1200),
+				ChunkOverlapChars: getenvint("AI_INDEX_CHUNK_OVERLAP_CHARS", 160),
+			},
 		},
 		Milvus: MilvusConfig{
 			Addr:            getenv("MILVUS_ADDR", ""),
+			CollectionName:  getenv("MILVUS_COLLECTION_NAME", "blog_chunks_v1"),
 			CollectionAlias: getenv("MILVUS_COLLECTION_ALIAS", "blog_chunks_active"),
 			Username:        getenv("MILVUS_USERNAME", ""),
 			Password:        getenv("MILVUS_PASSWORD", ""),
@@ -336,8 +359,9 @@ func validateTypedEnvironment() error {
 		"ARGON2_MEMORY_KIB", "ARGON2_ITERATIONS", "ARGON2_PARALLELISM",
 		"RATE_REGISTER_PER_MINUTE", "RATE_LOGIN_PER_MINUTE", "RATE_REFRESH_PER_MINUTE",
 		"RATE_COMMENT_PER_MINUTE", "RATE_AI_PER_MINUTE", "JOBS_MAX_ATTEMPTS",
-		"JOBS_LOCK_SECONDS", "JOBS_BATCH_SIZE", "AI_CHAT_MAX_RETRIES",
+		"JOBS_LOCK_SECONDS", "JOBS_BATCH_SIZE", "AI_CHAT_MAX_RETRIES", "AI_CHAT_MAX_TOKENS",
 		"AI_EMBEDDING_DIMENSIONS", "AI_EMBEDDING_BATCH_SIZE", "AI_EMBEDDING_MAX_RETRIES",
+		"AI_INDEX_CHUNK_CHARS", "AI_INDEX_CHUNK_OVERLAP_CHARS",
 		"RAG_TOP_K", "RAG_FINAL_CHUNKS", "RAG_MAX_CHUNKS_PER_POST", "RAG_MAX_QUESTION_CHARS",
 	}, func(value string) error {
 		_, err := strconv.Atoi(value)
@@ -351,7 +375,7 @@ func validateTypedEnvironment() error {
 		_, err := strconv.ParseFloat(value, 64)
 		return err
 	})
-	validate([]string{"AUTH_COOKIE_SECURE", "CORS_ALLOW_CREDENTIALS", "AI_ENABLED"}, func(value string) error {
+	validate([]string{"AUTH_COOKIE_SECURE", "CORS_ALLOW_CREDENTIALS", "AI_ENABLED", "AI_INDEXING_ENABLED", "AI_RAG_ENABLED"}, func(value string) error {
 		_, err := strconv.ParseBool(value)
 		return err
 	})
@@ -442,8 +466,13 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("JOBS_MAX_ATTEMPTS, JOBS_LOCK_SECONDS, JOBS_BATCH_SIZE must be positive"))
 	}
 
-	if c.AI.Enabled {
-		if err := c.validateAI(); err != nil {
+	if c.AI.IndexingEnabled || c.AI.RAGEnabled {
+		if err := c.validateIndexing(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.AI.RAGEnabled {
+		if err := c.validateRAG(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -485,38 +514,47 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-func (c *Config) validateAI() error {
+func (c *Config) validateIndexing() error {
 	var errs []error
 
-	if c.AI.Chat.BaseURL == "" || c.AI.Chat.APIKey == "" || c.AI.Chat.Model == "" {
-		errs = append(errs, errors.New("AI_CHAT_BASE_URL, AI_CHAT_API_KEY, AI_CHAT_MODEL are required when AI_ENABLED=true"))
-	} else if _, err := normalizeBaseURL(c.AI.Chat.BaseURL); err != nil {
-		errs = append(errs, fmt.Errorf("invalid AI_CHAT_BASE_URL: %w", err))
-	}
-
 	if c.AI.Embedding.BaseURL == "" || c.AI.Embedding.APIKey == "" || c.AI.Embedding.Model == "" {
-		errs = append(errs, errors.New("AI_EMBEDDING_BASE_URL, AI_EMBEDDING_API_KEY, AI_EMBEDDING_MODEL are required when AI_ENABLED=true"))
+		errs = append(errs, errors.New("AI_EMBEDDING_BASE_URL, AI_EMBEDDING_API_KEY, AI_EMBEDDING_MODEL are required when indexing or RAG is enabled"))
 	} else if _, err := normalizeBaseURL(c.AI.Embedding.BaseURL); err != nil {
 		errs = append(errs, fmt.Errorf("invalid AI_EMBEDDING_BASE_URL: %w", err))
 	}
-
-	// Embedding 维度必须显式配置，且与 Milvus Collection 维度一致；
-	// 启动探测阶段会再次校验实际返回维度。
-	if c.AI.Embedding.Dimensions <= 0 {
-		errs = append(errs, errors.New("AI_EMBEDDING_DIMENSIONS must be positive when AI_ENABLED=true"))
-	}
-	if c.AI.Embedding.Dimensions > 0 && (c.AI.Embedding.Dimensions < 64 || c.AI.Embedding.Dimensions > 8192) {
+	if c.AI.Embedding.Dimensions < 64 || c.AI.Embedding.Dimensions > 8192 {
 		errs = append(errs, fmt.Errorf("AI_EMBEDDING_DIMENSIONS %d out of plausible range [64,8192]", c.AI.Embedding.Dimensions))
 	}
-
-	if c.Milvus.Addr == "" {
-		errs = append(errs, errors.New("MILVUS_ADDR is required when AI_ENABLED=true"))
+	if c.AI.Embedding.BatchSize <= 0 || c.AI.Embedding.Timeout <= 0 || c.AI.Embedding.MaxRetries < 0 {
+		errs = append(errs, errors.New("embedding batch size and timeout must be positive and retries non-negative"))
 	}
-	if c.AI.RAG.TopK <= 0 || c.AI.RAG.FinalChunks <= 0 || c.AI.RAG.MaxChunksPerPost <= 0 {
-		errs = append(errs, errors.New("RAG_TOP_K, RAG_FINAL_CHUNKS, RAG_MAX_CHUNKS_PER_POST must be positive"))
+	if c.Milvus.Addr == "" || c.Milvus.CollectionName == "" {
+		errs = append(errs, errors.New("MILVUS_ADDR and MILVUS_COLLECTION_NAME are required when indexing or RAG is enabled"))
+	}
+	if c.AI.Indexing.ChunkChars <= 0 || c.AI.Indexing.ChunkOverlapChars < 0 || c.AI.Indexing.ChunkOverlapChars >= c.AI.Indexing.ChunkChars {
+		errs = append(errs, errors.New("AI index chunk chars must be positive and overlap must be smaller"))
+	}
+	return errors.Join(errs...)
+}
+
+func (c *Config) validateRAG() error {
+	var errs []error
+	if c.AI.Chat.BaseURL == "" || c.AI.Chat.APIKey == "" || c.AI.Chat.Model == "" {
+		errs = append(errs, errors.New("AI_CHAT_BASE_URL, AI_CHAT_API_KEY, AI_CHAT_MODEL are required when AI_RAG_ENABLED=true"))
+	} else if _, err := normalizeBaseURL(c.AI.Chat.BaseURL); err != nil {
+		errs = append(errs, fmt.Errorf("invalid AI_CHAT_BASE_URL: %w", err))
+	}
+	if c.AI.Chat.MaxTokens <= 0 || c.AI.Chat.Timeout <= 0 || c.AI.Chat.MaxRetries < 0 {
+		errs = append(errs, errors.New("chat max tokens and timeout must be positive and retries non-negative"))
+	}
+	if c.AI.RAG.TopK <= 0 || c.AI.RAG.FinalChunks <= 0 || c.AI.RAG.MaxChunksPerPost <= 0 || c.AI.RAG.MaxQuestionChars <= 0 {
+		errs = append(errs, errors.New("RAG_TOP_K, RAG_FINAL_CHUNKS, RAG_MAX_CHUNKS_PER_POST, and RAG_MAX_QUESTION_CHARS must be positive"))
 	}
 	if c.AI.RAG.FinalChunks > c.AI.RAG.TopK {
 		errs = append(errs, errors.New("RAG_FINAL_CHUNKS must not exceed RAG_TOP_K"))
+	}
+	if c.AI.RAG.ScoreThreshold < -1 || c.AI.RAG.ScoreThreshold > 1 {
+		errs = append(errs, errors.New("RAG_SCORE_THRESHOLD must be within [-1,1] for cosine similarity"))
 	}
 	return errors.Join(errs...)
 }

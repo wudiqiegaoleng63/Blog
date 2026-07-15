@@ -19,6 +19,7 @@ export function AppLayout() {
         </Link>
         <nav className="main-nav" aria-label="Main navigation">
           <NavLink to="/" end>Stories</NavLink>
+          <NavLink to="/ask">Ask AI</NavLink>
           {user && <NavLink to="/write">Write</NavLink>}
           {user?.role === 'admin' && <NavLink to="/admin/taxonomy">Taxonomy</NavLink>}
         </nav>
@@ -39,7 +40,7 @@ export function AppLayout() {
       <Outlet />
       <footer className="site-footer">
         <div><strong>Blog.</strong><span>Thoughtful writing, openly shared.</span></div>
-        <span>Stage 2 · Built with React and Go</span>
+        <span>Stage 4 · Grounded by published stories</span>
       </footer>
     </div>
   )

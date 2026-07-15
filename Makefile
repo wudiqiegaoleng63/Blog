@@ -15,7 +15,7 @@ COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
 help: ## 显示可用命令
 	@printf '%s\n' \
-	  'Stage 2 project commands (run from the project root)' \
+	  'Stage 4 project commands (run from the project root)' \
 	  '' \
 	  '  make help             Show this help' \
 	  '  make fmt              Format all Go source files' \
@@ -62,7 +62,7 @@ build: ## 构建三个后端命令
 frontend-check: ## 检查 Frontend lint、test 和 production build
 	@cd "$(FRONTEND_DIR)" && npm run lint && npm run test && npm run build
 
-check: fmt-check vet test build frontend-check ## 执行 Stage 2 本地质量检查
+check: fmt-check vet test build frontend-check ## 执行 Stage 4 本地质量检查
 
 migrate-list: ## 列出内嵌迁移；不连接数据库
 	@cd "$(BACKEND_DIR)" && "$(GO)" run ./cmd/migrate list

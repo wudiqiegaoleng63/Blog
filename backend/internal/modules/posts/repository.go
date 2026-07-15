@@ -8,16 +8,33 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/lsy/blog/internal/domain"
+	aimod "github.com/lsy/blog/internal/modules/ai"
+	"github.com/lsy/blog/internal/platform/jobs"
 )
 
 // Repository provides database access for posts, categories, and tags.
 type Repository struct {
-	db *gorm.DB
+	db           *gorm.DB
+	jobProducer  *jobs.Producer
+	indexEnabled bool
 }
 
 // NewRepository creates a posts repository.
-func NewRepository(db *gorm.DB) *Repository {
-	return &Repository{db: db}
+func NewRepository(db *gorm.DB, options ...RepositoryOption) *Repository {
+	r := &Repository{db: db}
+	for _, option := range options {
+		option(r)
+	}
+	return r
+}
+
+type RepositoryOption func(*Repository)
+
+func WithIndexJobs(maxAttempts int) RepositoryOption {
+	return func(r *Repository) {
+		r.jobProducer = jobs.NewProducer(r.db, maxAttempts)
+		r.indexEnabled = true
+	}
 }
 
 // --- Posts ---
@@ -37,6 +54,9 @@ func (r *Repository) CreatePost(ctx context.Context, post *domain.Post, category
 			if err := tx.Exec("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)", post.ID, tid).Error; err != nil {
 				return err
 			}
+		}
+		if r.indexEnabled {
+			return aimod.EnqueueIndexTx(ctx, r.jobProducer, tx, post, "upsert")
 		}
 		return nil
 	})
@@ -67,6 +87,9 @@ func (r *Repository) UpdatePost(ctx context.Context, post *domain.Post, category
 					return err
 				}
 			}
+		}
+		if r.indexEnabled {
+			return aimod.EnqueueIndexTx(ctx, r.jobProducer, tx, post, "upsert")
 		}
 		return nil
 	})
@@ -150,12 +173,17 @@ func (r *Repository) ListPosts(ctx context.Context, page, pageSize int, status, 
 	return posts, total, err
 }
 
-// SoftDeletePost sets deleted_at on a post by its ID.
-func (r *Repository) SoftDeletePost(ctx context.Context, postID uint64) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.Post{}).
-		Where("id = ?", postID).
-		Update("deleted_at", gorm.Expr("NOW(6)")).Error
+// SoftDeletePost atomically soft-deletes a post and enqueues vector removal.
+func (r *Repository) SoftDeletePost(ctx context.Context, post *domain.Post) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&domain.Post{}).Where("id = ?", post.ID).Update("deleted_at", gorm.Expr("NOW(6)")).Error; err != nil {
+			return err
+		}
+		if r.indexEnabled {
+			return aimod.EnqueueIndexTx(ctx, r.jobProducer, tx, post, "delete")
+		}
+		return nil
+	})
 }
 
 // --- Categories ---

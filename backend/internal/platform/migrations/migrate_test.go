@@ -15,8 +15,8 @@ import (
 	migrationfiles "github.com/lsy/blog/migrations"
 )
 
-func TestRootMigrationFSProvidesVersionOne(t *testing.T) {
-	for _, name := range []string{"0001_init.up.sql", "0001_init.down.sql"} {
+func TestRootMigrationFSProvidesAllVersions(t *testing.T) {
+	for _, name := range []string{"0001_init.up.sql", "0001_init.down.sql", "0002_ai_indexing.up.sql", "0002_ai_indexing.down.sql"} {
 		contents, err := fs.ReadFile(migrationfiles.FS, name)
 		if err != nil {
 			t.Fatalf("read embedded migration %q: %v", name, err)
@@ -30,7 +30,7 @@ func TestRootMigrationFSProvidesVersionOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListVersions: %v", err)
 	}
-	if want := []uint{1}; !reflect.DeepEqual(versions, want) {
+	if want := []uint{1, 2}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("ListVersions() = %v, want %v", versions, want)
 	}
 }

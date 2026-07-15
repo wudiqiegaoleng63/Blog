@@ -105,3 +105,16 @@ export interface PostInput {
   category_ids: string[]
   tag_ids: string[]
 }
+
+export interface AISource {
+  post_id: string
+  title: string
+  slug: string
+  excerpt: string
+  score: number
+}
+
+export interface AIAnswer {
+  answer: string
+  sources: AISource[]
+}

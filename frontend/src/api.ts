@@ -1,4 +1,5 @@
 import type {
+  AIAnswer,
   ApiFailure,
   ApiSuccess,
   Comment,
@@ -137,4 +138,9 @@ export const api = {
       body: JSON.stringify({ body_markdown: bodyMarkdown }),
     }),
   deleteComment: (id: string) => rawRequest<void>(`/comments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  askAI: (question: string) => rawRequest<AIAnswer>('/ai/ask', {
+    method: 'POST',
+    body: JSON.stringify({ question }),
+  }),
 }

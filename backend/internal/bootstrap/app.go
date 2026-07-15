@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/lsy/blog/internal/config"
+	aimod "github.com/lsy/blog/internal/modules/ai"
 	authmod "github.com/lsy/blog/internal/modules/auth"
 	"github.com/lsy/blog/internal/modules/comments"
 	"github.com/lsy/blog/internal/modules/operations"
@@ -22,6 +23,7 @@ import (
 	"github.com/lsy/blog/internal/platform/database"
 	"github.com/lsy/blog/internal/platform/httpserver"
 	"github.com/lsy/blog/internal/platform/observability"
+	"github.com/lsy/blog/internal/platform/openaicompat"
 	"github.com/lsy/blog/internal/platform/ratelimit"
 )
 
@@ -109,7 +111,11 @@ func (c *Container) registerModules() error {
 	authModule := authmod.NewModule(c.Cfg, authRepo)
 	authModule.Register(router, authMW, registerLimit, loginLimit, refreshLimit)
 
-	postsRepo := posts.NewRepository(c.DB)
+	postsRepoOptions := []posts.RepositoryOption{}
+	if c.Cfg.AI.IndexingEnabled {
+		postsRepoOptions = append(postsRepoOptions, posts.WithIndexJobs(c.Cfg.Jobs.MaxAttempts))
+	}
+	postsRepo := posts.NewRepository(c.DB, postsRepoOptions...)
 	postsModule := posts.NewModule(postsRepo)
 	postsModule.Register(router, authMW, adminMW, optionalAuthMW)
 
@@ -117,6 +123,25 @@ func (c *Container) registerModules() error {
 	commentsModule := comments.NewModule(commentsRepo, postsRepo)
 	commentLimit := ratelimit.Middleware(c.Redis, c.Keys, "comment:write", c.Cfg.RateLimit.CommentPerMinute, ratelimit.ByUser)
 	commentsModule.Register(router, authMW, commentLimit)
+
+	if c.Cfg.AI.IndexingEnabled || c.Cfg.AI.RAGEnabled {
+		aiRepo := aimod.NewRepository(c.DB, c.Cfg.Jobs.MaxAttempts)
+		var rag *aimod.RAGService
+		if c.Cfg.AI.RAGEnabled {
+			embedder, err := openaicompat.New(c.Cfg.AI.Embedding.BaseURL, c.Cfg.AI.Embedding.APIKey, c.Cfg.AI.Embedding.Timeout, c.Cfg.AI.Embedding.MaxRetries)
+			if err != nil {
+				return err
+			}
+			chat, err := openaicompat.New(c.Cfg.AI.Chat.BaseURL, c.Cfg.AI.Chat.APIKey, c.Cfg.AI.Chat.Timeout, c.Cfg.AI.Chat.MaxRetries)
+			if err != nil {
+				return err
+			}
+			vectors := aimod.NewMilvusStore(c.Cfg.Milvus, c.Cfg.AI.Embedding.Dimensions)
+			rag = aimod.NewRAGService(c.DB, embedder, chat, vectors, c.Cfg.AI)
+		}
+		aiLimit := ratelimit.StrictMiddleware(c.Redis, c.Keys, "ai:ask", c.Cfg.RateLimit.AIPerMinute, ratelimit.ByIP)
+		aimod.NewModule(aiRepo, rag).Register(router, adminMW, aiLimit)
+	}
 
 	return nil
 }

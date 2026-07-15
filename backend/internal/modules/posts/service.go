@@ -162,7 +162,6 @@ func (s *Service) Update(ctx *gin.Context, slug string, input UpdatePostInput) (
 			return nil, apperr.Validation("content_markdown must contain visible content", nil)
 		}
 		post.ContentMarkdown, post.ContentHTML = *input.ContentMarkdown, html
-		post.ContentVersion++
 	}
 	if input.Summary != nil {
 		summary := strings.TrimSpace(*input.Summary)
@@ -213,6 +212,7 @@ func (s *Service) Update(ctx *gin.Context, slug string, input UpdatePostInput) (
 			tagIDs = &validatedTags
 		}
 	}
+	post.ContentVersion++
 	post.UpdatedAt = time.Now().UTC()
 	if err := s.repo.UpdatePost(ctx.Request.Context(), post, categoryIDs, tagIDs); err != nil {
 		return nil, apperr.Internal(err, "")
@@ -277,7 +277,7 @@ func (s *Service) Delete(ctx *gin.Context, slug string) error {
 	if err := s.authorizePost(ctx, post); err != nil {
 		return err
 	}
-	if err := s.repo.SoftDeletePost(ctx.Request.Context(), post.ID); err != nil {
+	if err := s.repo.SoftDeletePost(ctx.Request.Context(), post); err != nil {
 		return apperr.Internal(err, "")
 	}
 	return nil

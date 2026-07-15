@@ -144,6 +144,21 @@ type Job struct {
 
 func (Job) TableName() string { return "background_jobs" }
 
+type AIDocument struct {
+	ID             uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PostID         uint64     `json:"-" gorm:"column:post_id"`
+	ContentVersion uint64     `json:"content_version" gorm:"column:content_version"`
+	EmbeddingModel string     `json:"embedding_model" gorm:"column:embedding_model"`
+	ChunkCount     uint       `json:"chunk_count" gorm:"column:chunk_count"`
+	Status         string     `json:"status" gorm:"column:status"`
+	LastError      *string    `json:"-" gorm:"column:last_error"`
+	IndexedAt      *time.Time `json:"indexed_at,omitempty" gorm:"column:indexed_at"`
+	CreatedAt      time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" gorm:"column:updated_at"`
+}
+
+func (AIDocument) TableName() string { return "ai_documents" }
+
 type TokenPair struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int64  `json:"expires_in"`

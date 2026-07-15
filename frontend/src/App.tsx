@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router'
 import { AuthProvider } from './auth'
 import { ErrorBoundary, ProtectedRoute } from './components'
 import { AppLayout } from './layout'
+import { AskPage } from './pages/AskPage'
 import { AuthPage } from './pages/AuthPage'
 import { EditorPage } from './pages/EditorPage'
 import { HomePage } from './pages/HomePage'
@@ -17,6 +18,7 @@ export default function App() {
   return <BrowserRouter><ErrorBoundary><AuthProvider><Routes>
     <Route element={<AppLayout />}>
       <Route index element={<HomePage />} />
+      <Route path="ask" element={<AskPage />} />
       <Route path="posts/:slug" element={<PostPage />} />
       <Route element={<ProtectedRoute />}><Route path="write" element={<EditorPage />} /></Route>
       <Route element={<ProtectedRoute admin />}><Route path="admin/taxonomy" element={<TaxonomyPage />} /></Route>

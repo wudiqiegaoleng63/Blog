@@ -15,8 +15,10 @@ import (
 	"github.com/lsy/blog/internal/bootstrap"
 	"github.com/lsy/blog/internal/config"
 	"github.com/lsy/blog/internal/domain"
+	aimod "github.com/lsy/blog/internal/modules/ai"
 	"github.com/lsy/blog/internal/modules/comments"
 	"github.com/lsy/blog/internal/platform/jobs"
+	"github.com/lsy/blog/internal/platform/openaicompat"
 )
 
 func main() {
@@ -51,8 +53,21 @@ func main() {
 	registry.Register(comments.ModerationJobType, func(ctx context.Context, job *domain.Job) error {
 		return commentsRepo.Moderate(ctx, job.PayloadJSON)
 	})
+	if cfg.AI.IndexingEnabled {
+		embedder, err := openaicompat.New(cfg.AI.Embedding.BaseURL, cfg.AI.Embedding.APIKey, cfg.AI.Embedding.Timeout, cfg.AI.Embedding.MaxRetries)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "embedding client setup failed: %v\n", err)
+			os.Exit(1)
+		}
+		vectors := aimod.NewMilvusStore(cfg.Milvus, cfg.AI.Embedding.Dimensions)
+		defer vectors.Close(context.Background())
+		indexer := aimod.NewIndexer(aimod.NewRepository(c.DB, cfg.Jobs.MaxAttempts), embedder, vectors, cfg.AI)
+		registry.Register(aimod.IndexJobType, func(ctx context.Context, job *domain.Job) error {
+			return indexer.Handle(ctx, job.PayloadJSON)
+		})
+	}
 
-	c.Logger.Info("worker started (stage 1)",
+	c.Logger.Info("worker started",
 		"env", cfg.App.Env,
 		"locked_by", consumer.LockedBy(),
 		"poll_interval", consumer.PollInterval().String(),
