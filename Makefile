@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND_DIR := $(ROOT_DIR)/backend
+FRONTEND_DIR := $(ROOT_DIR)/frontend
 BIN_DIR ?= $(ROOT_DIR)/bin
 ENV_FILE ?= $(ROOT_DIR)/.env
 COMPOSE_FILE := $(ROOT_DIR)/deploy/compose.yaml
@@ -10,11 +11,11 @@ GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
-.PHONY: help fmt fmt-check test vet build check migrate-list compose-config compose-build up dev-up down logs ps
+.PHONY: help fmt fmt-check test vet build frontend-check check migrate-list compose-config compose-build up dev-up down logs ps
 
 help: ## 显示可用命令
 	@printf '%s\n' \
-	  'Stage 1 project commands (run from the project root)' \
+	  'Stage 2 project commands (run from the project root)' \
 	  '' \
 	  '  make help             Show this help' \
 	  '  make fmt              Format all Go source files' \
@@ -58,7 +59,10 @@ build: ## 构建三个后端命令
 		"$(GO)" build -trimpath -o "$(BIN_DIR)/$$command" "./cmd/$$command" || exit $$?; \
 	done
 
-check: fmt-check vet test build ## 执行 Stage 1 本地质量检查
+frontend-check: ## 检查 Frontend lint、test 和 production build
+	@cd "$(FRONTEND_DIR)" && npm run lint && npm run test && npm run build
+
+check: fmt-check vet test build frontend-check ## 执行 Stage 2 本地质量检查
 
 migrate-list: ## 列出内嵌迁移；不连接数据库
 	@cd "$(BACKEND_DIR)" && "$(GO)" run ./cmd/migrate list

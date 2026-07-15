@@ -1,11 +1,12 @@
 # Blog
 
-这是 Blog 项目的 **Stage 1 后端交付**：认证、文章/分类/标签/评论 API、Redis 限流、MySQL 后台任务，以及 Stage 0 的健康检查、migration 和 Compose 基础设施。
+这是 Blog 项目的 **Stage 2 全栈交付**：React Frontend、认证、文章/分类/标签/评论 API、Redis 限流、MySQL 后台任务，以及健康检查、migration 和 Compose 基础设施。
 
-> Frontend 源码不在当前工作区。AI Chat、Embedding、Milvus 与 RAG 尚未实现，分别属于 Stage 3/4。
+> Frontend 已由 Compose 同源交付。AI Chat、Embedding、Milvus 与 RAG 尚未实现，分别属于 Stage 3/4。
 
 ## 当前能力
 
+- Frontend：React 19 SPA，公开阅读、认证恢复、写作/评论与管理员 taxonomy 页面。
 - 认证：注册、登录、Refresh Token 轮换、注销、当前用户；Argon2id + 短期 JWT + HttpOnly Refresh Cookie。
 - 博客领域：文章、分类、标签和一层回复评论；Markdown 渲染后进行 HTML 清洗。
 - 授权：所有受保护路由实时校验账号状态、`token_version` 和数据库当前角色。
@@ -13,10 +14,11 @@
 - Worker：评论写入与 moderation 任务原子提交；领取、重试、dead job、stale-lock 恢复。
 - 运维：`GET /health/live`、`GET /health/ready`，SQL migration、Nginx 和 Docker Compose。
 
-详细契约见 [`docs/architecture/stage-1.md`](docs/architecture/stage-1.md)。Stage 0 基线见 [`docs/architecture/stage-0.md`](docs/architecture/stage-0.md)，架构决策见 [`docs/adr/0001-modular-monolith.md`](docs/adr/0001-modular-monolith.md)。
+Frontend 契约见 [`docs/architecture/stage-2.md`](docs/architecture/stage-2.md)，后端契约见 [`docs/architecture/stage-1.md`](docs/architecture/stage-1.md)。Stage 0 基线见 [`docs/architecture/stage-0.md`](docs/architecture/stage-0.md)，架构决策见 [`docs/adr/0001-modular-monolith.md`](docs/adr/0001-modular-monolith.md)。
 
 ## 技术栈
 
+- React 19、TypeScript、Vite 8、React Router 7
 - Go 1.25、Gin、GORM
 - Argon2id、JWT、Goldmark、Bluemonday
 - `golang-migrate` 与内嵌 SQL migrations
@@ -27,6 +29,7 @@
 
 ```text
 Blog/
+├── frontend/             # React SPA、测试与 production Dockerfile
 ├── backend/
 │   ├── cmd/{api,worker,migrate}/
 │   ├── internal/modules/{auth,posts,comments,operations}/
@@ -178,6 +181,6 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 
 ## 后续路线
 
-1. 第 2 批：Frontend 页面与 API 集成。
+1. 第 2 批：Stage 2：Frontend 页面与 API 集成（已完成）。
 2. Stage 3：OpenAI-compatible Embedding、Milvus 与文章索引。
 3. Stage 4：OpenAI-compatible Chat、检索与 RAG 问答。

@@ -75,10 +75,29 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      frontend:
+        condition: service_healthy
     networks:
       - core
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    image: blog-frontend:${BLOG_FRONTEND_IMAGE_TAG:-stage2}
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    networks:
+      - core
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 10s
       timeout: 3s
       retries: 3
