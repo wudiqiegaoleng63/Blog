@@ -61,6 +61,36 @@ x-app-environment: &app-environment
   JOBS_LOCK_SECONDS: ${JOBS_LOCK_SECONDS:-60}
   JOBS_BATCH_SIZE: ${JOBS_BATCH_SIZE:-10}
   AI_ENABLED: ${AI_ENABLED:-false}
+  AI_INDEXING_ENABLED: ${AI_INDEXING_ENABLED:-false}
+  AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
+  AI_CHAT_BASE_URL: ${AI_CHAT_BASE_URL:-}
+  AI_CHAT_API_KEY: ${AI_CHAT_API_KEY:-}
+  AI_CHAT_MODEL: ${AI_CHAT_MODEL:-}
+  AI_CHAT_MAX_TOKENS: ${AI_CHAT_MAX_TOKENS:-1200}
+  AI_CHAT_TIMEOUT: ${AI_CHAT_TIMEOUT:-90s}
+  AI_CHAT_STREAM_IDLE_TIMEOUT: ${AI_CHAT_STREAM_IDLE_TIMEOUT:-45s}
+  AI_CHAT_MAX_RETRIES: ${AI_CHAT_MAX_RETRIES:-2}
+  AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-}
+  AI_EMBEDDING_API_KEY: ${AI_EMBEDDING_API_KEY:-}
+  AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-}
+  AI_EMBEDDING_DIMENSIONS: ${AI_EMBEDDING_DIMENSIONS:-0}
+  AI_EMBEDDING_BATCH_SIZE: ${AI_EMBEDDING_BATCH_SIZE:-32}
+  AI_EMBEDDING_TIMEOUT: ${AI_EMBEDDING_TIMEOUT:-30s}
+  AI_EMBEDDING_MAX_RETRIES: ${AI_EMBEDDING_MAX_RETRIES:-3}
+  AI_INDEX_CHUNK_CHARS: ${AI_INDEX_CHUNK_CHARS:-1200}
+  AI_INDEX_CHUNK_OVERLAP_CHARS: ${AI_INDEX_CHUNK_OVERLAP_CHARS:-160}
+  MILVUS_ADDR: ${MILVUS_ADDR:-http://milvus:19530}
+  MILVUS_COLLECTION_NAME: ${MILVUS_COLLECTION_NAME:-blog_chunks_v1}
+  MILVUS_COLLECTION_ALIAS: ${MILVUS_COLLECTION_ALIAS:-blog_chunks_active}
+  MILVUS_USERNAME: ${MILVUS_USERNAME:-}
+  MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
+  MILVUS_DIAL_TIMEOUT: ${MILVUS_DIAL_TIMEOUT:-5s}
+  MILVUS_CONNECT_TIMEOUT: ${MILVUS_CONNECT_TIMEOUT:-10s}
+  RAG_TOP_K: ${RAG_TOP_K:-20}
+  RAG_FINAL_CHUNKS: ${RAG_FINAL_CHUNKS:-6}
+  RAG_MAX_CHUNKS_PER_POST: ${RAG_MAX_CHUNKS_PER_POST:-3}
+  RAG_SCORE_THRESHOLD: ${RAG_SCORE_THRESHOLD:-0.0}
+  RAG_MAX_QUESTION_CHARS: ${RAG_MAX_QUESTION_CHARS:-2000}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   LOG_FORMAT: ${LOG_FORMAT:-json}
   REQUEST_ID_HEADER: ${REQUEST_ID_HEADER:-X-Request-ID}
@@ -75,10 +105,29 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      frontend:
+        condition: service_healthy
     networks:
       - core
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    image: blog-frontend:${BLOG_FRONTEND_IMAGE_TAG:-stage2}
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    networks:
+      - core
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -99,6 +148,9 @@ services:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+        required: false
+      milvus:
         condition: service_healthy
         required: false
     healthcheck:
@@ -122,6 +174,9 @@ services:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+        required: false
+      milvus:
         condition: service_healthy
         required: false
     healthcheck:
@@ -183,9 +238,30 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  milvus:
+    image: milvusdb/milvus:v2.5.9
+    command: ["milvus", "run", "standalone"]
+    volumes:
+      - milvus_data:/var/lib/milvus
+    networks:
+      - core
+    environment:
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9091/healthz"]
+      interval: 10s
+      timeout: 7s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   mysql_data:
   redis_data:
+  milvus_data:
 
 networks:
   core:

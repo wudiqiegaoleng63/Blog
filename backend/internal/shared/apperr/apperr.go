@@ -30,6 +30,7 @@ const (
 	CodeUnsupportedMedia   Code = "unsupported_media_type"
 	CodeServiceUnavailable Code = "service_unavailable"
 	CodeAINotEnabled       Code = "ai_not_enabled"
+	CodeAIUnavailable      Code = "ai_unavailable"
 )
 
 // AppError 是应用层错误的统一结构。实现 error 与 Unwrap 接口。
@@ -124,6 +125,14 @@ func ServiceUnavailable(message string) *AppError {
 		message = "service temporarily unavailable"
 	}
 	return New(CodeServiceUnavailable, message, http.StatusServiceUnavailable)
+}
+
+func AINotEnabled() *AppError {
+	return New(CodeAINotEnabled, "AI question answering is not enabled", http.StatusServiceUnavailable)
+}
+
+func AIUnavailable(cause error) *AppError {
+	return Wrap(CodeAIUnavailable, "AI question answering is temporarily unavailable", http.StatusServiceUnavailable, cause)
 }
 
 // As 将任意 error 解析为 *AppError。

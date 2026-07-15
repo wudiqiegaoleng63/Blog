@@ -27,8 +27,22 @@ type IdentityFunc func(*gin.Context) string
 // preserve the project's soft-dependency contract; callers should separately
 // protect public ingress with a gateway/WAF in production.
 func Middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc) gin.HandlerFunc {
+	return middleware(client, keys, scope, limitPerMinute, identity, false)
+}
+
+// StrictMiddleware fails closed when Redis cannot enforce a cost-sensitive limit.
+func StrictMiddleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc) gin.HandlerFunc {
+	return middleware(client, keys, scope, limitPerMinute, identity, true)
+}
+
+func middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc, failClosed bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if client == nil || limitPerMinute <= 0 {
+			if failClosed {
+				c.Abort()
+				_ = c.Error(apperr.ServiceUnavailable("AI rate limiting is temporarily unavailable"))
+				return
+			}
 			c.Next()
 			return
 		}
@@ -37,6 +51,11 @@ func Middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limi
 		defer cancel()
 		result, err := incrementScript.Run(ctx, client, []string{key}, int64((2*time.Minute)/time.Millisecond)).Int64()
 		if err != nil {
+			if failClosed {
+				c.Abort()
+				_ = c.Error(apperr.ServiceUnavailable("AI rate limiting is temporarily unavailable"))
+				return
+			}
 			c.Next()
 			return
 		}
