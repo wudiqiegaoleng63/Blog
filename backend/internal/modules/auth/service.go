@@ -63,7 +63,7 @@ func (s *Service) Register(ctx *gin.Context, input RegisterInput) (*domain.Token
 		return nil, apperr.Conflict("username already taken")
 	}
 
-	passwordHash, err := HashPassword(input.Password)
+	passwordHash, err := HashPassword(input.Password, s.cfg.Auth)
 	if err != nil {
 		return nil, apperr.Internal(err, "")
 	}
@@ -113,8 +113,8 @@ func (s *Service) Login(ctx *gin.Context, input LoginInput) (*domain.TokenPair, 
 	if user == nil {
 		return nil, apperr.Unauthorized("invalid email or password")
 	}
-	if user.Status == "banned" {
-		return nil, apperr.Forbidden("account is banned")
+	if user.Status != "active" {
+		return nil, apperr.Forbidden("account is unavailable")
 	}
 
 	if err := VerifyPassword(input.Password, user.PasswordHash); err != nil {
@@ -138,27 +138,28 @@ func (s *Service) Refresh(ctx *gin.Context, refreshTokenStr string) (*domain.Tok
 	if rt == nil {
 		return nil, apperr.Unauthorized("invalid or expired refresh token")
 	}
+	if rt.RevokedAt != nil {
+		if err := s.repo.RevokeTokenFamily(ctx.Request.Context(), rt.FamilyID); err != nil {
+			return nil, apperr.Internal(err, "")
+		}
+		s.clearRefreshCookie(ctx)
+		return nil, apperr.Unauthorized("refresh token reuse detected")
+	}
 
 	// Load user to get current token version
 	user, err := s.repo.FindUserByID(ctx.Request.Context(), rt.UserID)
 	if err != nil {
 		return nil, apperr.Internal(err, "")
 	}
-	if user == nil || user.Status == "banned" {
-		return nil, apperr.Unauthorized("account not found or banned")
+	if user == nil || user.Status != "active" {
+		return nil, apperr.Unauthorized("account is unavailable")
 	}
 
-	// Issue new pair (this also creates a new refresh token row)
-	pair, newRT, err := s.issueTokenPairWithRefresh(ctx, user.ID, user.PublicID, user.Username, user.Role, user.TokenVersion, rt.FamilyID)
+	pair, rawRefreshToken, err := s.rotateTokenPair(ctx, rt, user)
 	if err != nil {
 		return nil, err
 	}
-
-	// Rotate: mark old token as replaced by the new one
-	_ = s.repo.SetTokenReplaced(ctx.Request.Context(), rt.ID, newRT.ID)
-
-	pair.RefreshToken = newRT.Raw
-	s.setRefreshCookie(ctx, newRT.Raw)
+	s.setRefreshCookie(ctx, rawRefreshToken)
 	return pair, nil
 }
 
@@ -182,13 +183,13 @@ func (s *Service) Logout(ctx *gin.Context, refreshTokenStr string) error {
 
 // --- Me ---
 
-func (s *Service) Me(ctx *gin.Context, userPublicID string) (*domain.User, *domain.UserProfile, error) {
+func (s *Service) Me(ctx *gin.Context, userPublicID string, tokenVersion uint64) (*domain.User, *domain.UserProfile, error) {
 	user, err := s.repo.FindUserByPublicID(ctx.Request.Context(), userPublicID)
 	if err != nil {
 		return nil, nil, apperr.Internal(err, "")
 	}
-	if user == nil {
-		return nil, nil, apperr.NotFound("user not found")
+	if user == nil || user.Status != "active" || user.TokenVersion != tokenVersion {
+		return nil, nil, apperr.Unauthorized("account is unavailable or token was revoked")
 	}
 	profile, err := s.repo.GetProfile(ctx.Request.Context(), user.ID)
 	if err != nil {
@@ -199,50 +200,62 @@ func (s *Service) Me(ctx *gin.Context, userPublicID string) (*domain.User, *doma
 
 // --- internal helpers ---
 
-type refreshTokenRaw struct {
-	*domain.RefreshToken
-	Raw string
-}
-
 func (s *Service) issueTokenPair(ctx *gin.Context, numericID uint64, publicID, username, role string, tokenVer uint64) (*domain.TokenPair, error) {
-	pair, rt, err := s.issueTokenPairWithRefresh(ctx, numericID, publicID, username, role, tokenVer, ids.MustNewULID())
+	pair, rawRefreshToken, err := s.createTokenPair(ctx, numericID, publicID, username, role, tokenVer, ids.MustNewULID())
 	if err != nil {
 		return nil, err
 	}
-	pair.RefreshToken = rt.Raw
-	s.setRefreshCookie(ctx, rt.Raw)
+	s.setRefreshCookie(ctx, rawRefreshToken)
 	return pair, nil
 }
 
-func (s *Service) issueTokenPairWithRefresh(ctx *gin.Context, numericID uint64, publicID, username, role string, tokenVer uint64, familyID string) (*domain.TokenPair, *refreshTokenRaw, error) {
+func (s *Service) createTokenPair(ctx *gin.Context, numericID uint64, publicID, username, role string, tokenVer uint64, familyID string) (*domain.TokenPair, string, error) {
 	accessToken, _, err := GenerateAccessToken(s.cfg.Auth, publicID, username, role, tokenVer)
 	if err != nil {
-		return nil, nil, apperr.Internal(err, "")
+		return nil, "", apperr.Internal(err, "")
 	}
-
-	rawRT, err := GenerateRefreshToken()
+	rawRefreshToken, err := GenerateRefreshToken()
 	if err != nil {
-		return nil, nil, apperr.Internal(err, "")
+		return nil, "", apperr.Internal(err, "")
 	}
-	rtHash := HashToken(rawRT)
-
-	newRT := &domain.RefreshToken{
-		PublicID: ids.MustNewULID(),
-		UserID:   numericID,
-		FamilyID: familyID,
-		TokenHash: rtHash,
-		ExpiresAt: time.Now().UTC().Add(s.cfg.Auth.RefreshTokenTTL),
+	refreshToken := &domain.RefreshToken{
+		PublicID: ids.MustNewULID(), UserID: numericID, FamilyID: familyID,
+		TokenHash: HashToken(rawRefreshToken), ExpiresAt: time.Now().UTC().Add(s.cfg.Auth.RefreshTokenTTL),
 	}
-
-	if err := s.repo.CreateRefreshToken(ctx.Request.Context(), newRT); err != nil {
-		return nil, nil, apperr.Internal(err, "")
+	if err := s.repo.CreateRefreshToken(ctx.Request.Context(), refreshToken); err != nil {
+		return nil, "", apperr.Internal(err, "")
 	}
-
 	return &domain.TokenPair{
 		AccessToken: accessToken,
 		ExpiresIn:   int64(s.cfg.Auth.AccessTokenTTL.Seconds()),
 		TokenType:   "Bearer",
-	}, &refreshTokenRaw{RefreshToken: newRT, Raw: rawRT}, nil
+	}, rawRefreshToken, nil
+}
+
+func (s *Service) rotateTokenPair(ctx *gin.Context, current *domain.RefreshToken, user *domain.User) (*domain.TokenPair, string, error) {
+	accessToken, _, err := GenerateAccessToken(s.cfg.Auth, user.PublicID, user.Username, user.Role, user.TokenVersion)
+	if err != nil {
+		return nil, "", apperr.Internal(err, "")
+	}
+	rawRefreshToken, err := GenerateRefreshToken()
+	if err != nil {
+		return nil, "", apperr.Internal(err, "")
+	}
+	newToken := &domain.RefreshToken{
+		PublicID: ids.MustNewULID(), UserID: user.ID, FamilyID: current.FamilyID,
+		TokenHash: HashToken(rawRefreshToken), ExpiresAt: time.Now().UTC().Add(s.cfg.Auth.RefreshTokenTTL),
+	}
+	if err := s.repo.RotateRefreshToken(ctx.Request.Context(), current.ID, newToken); err != nil {
+		if errors.Is(err, ErrTokenInvalid) {
+			return nil, "", apperr.Unauthorized("refresh token was already used")
+		}
+		return nil, "", apperr.Internal(err, "")
+	}
+	return &domain.TokenPair{
+		AccessToken: accessToken,
+		ExpiresIn:   int64(s.cfg.Auth.AccessTokenTTL.Seconds()),
+		TokenType:   "Bearer",
+	}, rawRefreshToken, nil
 }
 
 func (s *Service) setRefreshCookie(ctx *gin.Context, token string) {

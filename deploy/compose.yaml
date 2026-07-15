@@ -1,7 +1,7 @@
 name: blog
 
 x-backend-service: &backend-service
-  image: blog-backend:${BLOG_BACKEND_IMAGE_TAG:-stage0}
+  image: blog-backend:${BLOG_BACKEND_IMAGE_TAG:-stage1}
   build:
     context: ../backend
     dockerfile: Dockerfile
@@ -21,7 +21,7 @@ x-app-environment: &app-environment
   HTTP_SHUTDOWN_TIMEOUT: ${HTTP_SHUTDOWN_TIMEOUT:-15s}
   HTTP_MAX_BODY_BYTES: ${HTTP_MAX_BODY_BYTES:-2097152}
   HTTP_TRUSTED_PROXIES: ${HTTP_TRUSTED_PROXIES:-172.28.0.0/16}
-  MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; URL-escape reserved password characters}
+  MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; do not URL-encode go-sql-driver/mysql passwords}
   MYSQL_MAX_OPEN_CONNS: ${MYSQL_MAX_OPEN_CONNS:-25}
   MYSQL_MAX_IDLE_CONNS: ${MYSQL_MAX_IDLE_CONNS:-5}
   MYSQL_CONN_MAX_LIFETIME: ${MYSQL_CONN_MAX_LIFETIME:-30m}
@@ -78,7 +78,7 @@ services:
     networks:
       - core
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -108,6 +108,7 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    stop_grace_period: ${API_STOP_GRACE_PERIOD:-20s}
 
   worker:
     <<: *backend-service
@@ -136,7 +137,7 @@ services:
     command: ["migrate", "up"]
     environment:
       APP_ENV: ${APP_ENV:-production}
-      MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; URL-escape reserved password characters}
+      MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; do not URL-encode go-sql-driver/mysql passwords}
     depends_on:
       mysql:
         condition: service_healthy

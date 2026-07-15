@@ -53,6 +53,7 @@ func New(cfg *config.Config, logger *observability.Logger) (*Engine, error) {
 		RequestID(cfg.Observability.RequestIDHeader),
 		Recovery(logger),
 		RequestLog(logger),
+		RequestTimeout(cfg.App.RequestTimeout),
 		CORS(cfg.CORS),
 		MaxBody(cfg.HTTP.MaxBodyBytes),
 		ErrorHandler(logger),
@@ -163,6 +164,21 @@ func RequestLog(logger *observability.Logger) gin.HandlerFunc {
 			"duration_ms", time.Since(start).Milliseconds(),
 			"ip", c.ClientIP(),
 		)
+	}
+}
+
+// RequestTimeout bounds request-scoped downstream work. It does not forcibly
+// stop handlers that ignore context cancellation.
+func RequestTimeout(timeout time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if timeout <= 0 {
+			c.Next()
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
 	}
 }
 

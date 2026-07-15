@@ -1,116 +1,125 @@
 package auth
 
 import (
-	"net/http"
+	"errors"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/lsy/blog/internal/config"
+	"github.com/lsy/blog/internal/domain"
 	"github.com/lsy/blog/internal/shared/apperr"
 )
 
-// contextKey is a private type to avoid key collisions.
-type contextKey string
+const (
+	claimsKey      = "auth_claims"
+	currentUserKey = "auth_current_user"
+)
 
-const claimsKey contextKey = "auth_claims"
-
-// RequireAuth is a Gin middleware that validates the Bearer token and injects Claims.
-func RequireAuth(cfg config.AuthConfig) gin.HandlerFunc {
+// RequireAuth validates the JWT against the current account state. This makes
+// account suspension, role changes, and token-version revocation effective on
+// every protected route rather than only when the access token expires.
+func RequireAuth(cfg config.AuthConfig, repo *Repository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := extractBearer(c)
-		if token == "" {
-			c.Abort()
-			c.Error(apperr.Unauthorized(""))
-			return
-		}
-
-		claims, err := VerifyAccessToken(cfg, token)
+		claims, user, err := authenticateCurrent(c, cfg, repo)
 		if err != nil {
 			c.Abort()
-			if err == ErrTokenExpired {
-				c.Error(apperr.Unauthorized("token expired"))
-			} else {
-				c.Error(apperr.Unauthorized(""))
-			}
+			_ = c.Error(err)
 			return
 		}
-
 		SetClaims(c, claims)
+		SetCurrentUser(c, user)
 		c.Next()
 	}
 }
 
-// RequireAdmin requires a valid token with role "admin".
-func RequireAdmin(cfg config.AuthConfig) gin.HandlerFunc {
+func RequireAdmin(cfg config.AuthConfig, repo *Repository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := extractBearer(c)
-		if token == "" {
-			c.Abort()
-			c.Error(apperr.Unauthorized(""))
-			return
-		}
-
-		claims, err := VerifyAccessToken(cfg, token)
+		claims, user, err := authenticateCurrent(c, cfg, repo)
 		if err != nil {
 			c.Abort()
-			if err == ErrTokenExpired {
-				c.Error(apperr.Unauthorized("token expired"))
-			} else {
-				c.Error(apperr.Unauthorized(""))
-			}
+			_ = c.Error(err)
 			return
 		}
-
 		if claims.Role != "admin" {
 			c.Abort()
-			c.Error(apperr.Forbidden("admin access required"))
+			_ = c.Error(apperr.Forbidden("admin access required"))
 			return
 		}
-
 		SetClaims(c, claims)
+		SetCurrentUser(c, user)
 		c.Next()
 	}
 }
 
-// OptionalAuth extracts the token if present but does not require it.
-func OptionalAuth(cfg config.AuthConfig) gin.HandlerFunc {
+func OptionalAuth(cfg config.AuthConfig, repo *Repository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := extractBearer(c)
-		if token != "" {
-			claims, err := VerifyAccessToken(cfg, token)
-			if err == nil {
-				SetClaims(c, claims)
-			}
+		if claims, user, err := authenticateCurrent(c, cfg, repo); err == nil {
+			SetClaims(c, claims)
+			SetCurrentUser(c, user)
 		}
 		c.Next()
 	}
+}
+
+func authenticateCurrent(c *gin.Context, cfg config.AuthConfig, repo *Repository) (*Claims, *domain.User, error) {
+	claims, err := authenticate(c, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	user, err := repo.FindUserByPublicID(c.Request.Context(), claims.UserID)
+	if err != nil {
+		return nil, nil, apperr.Internal(err, "")
+	}
+	if user == nil || user.Status != "active" || user.TokenVersion != claims.TokenVer {
+		return nil, nil, apperr.Unauthorized("account is unavailable or token was revoked")
+	}
+	claims.Role = user.Role
+	claims.Username = user.Username
+	return claims, user, nil
+}
+
+func authenticate(c *gin.Context, cfg config.AuthConfig) (*Claims, error) {
+	token := extractBearer(c)
+	if token == "" {
+		return nil, apperr.Unauthorized("")
+	}
+	claims, err := VerifyAccessToken(cfg, token)
+	if err != nil {
+		if errors.Is(err, ErrTokenExpired) {
+			return nil, apperr.Unauthorized("token expired")
+		}
+		return nil, apperr.Unauthorized("")
+	}
+	return claims, nil
 }
 
 func extractBearer(c *gin.Context) string {
-	header := c.GetHeader("Authorization")
-	if header == "" || !strings.HasPrefix(header, "Bearer ") {
+	parts := strings.Fields(c.GetHeader("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(header[7:])
+	return parts[1]
 }
 
-// SetClaims stores parsed token claims in the Gin context.
-func SetClaims(c *gin.Context, claims *Claims) {
-	c.Set(string(claimsKey), claims)
-}
+func SetClaims(c *gin.Context, claims *Claims) { c.Set(claimsKey, claims) }
 
-// GetClaims retrieves parsed token claims from the Gin context.
 func GetClaims(c *gin.Context) *Claims {
-	v, ok := c.Get(string(claimsKey))
+	value, ok := c.Get(claimsKey)
 	if !ok {
 		return nil
 	}
-	claims, ok := v.(*Claims)
-	if !ok {
-		return nil
-	}
+	claims, _ := value.(*Claims)
 	return claims
 }
 
-var _ = http.StatusOK
+func SetCurrentUser(c *gin.Context, user *domain.User) { c.Set(currentUserKey, user) }
+
+func GetCurrentUser(c *gin.Context) *domain.User {
+	value, ok := c.Get(currentUserKey)
+	if !ok {
+		return nil
+	}
+	user, _ := value.(*domain.User)
+	return user
+}

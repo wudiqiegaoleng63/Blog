@@ -22,14 +22,15 @@ func New(ctx context.Context, cfg config.RedisConfig) (*redis.Client, error) {
 	}
 
 	client := redis.NewClient(&redis.Options{
-		Addr:         cfg.Addr,
-		Username:     cfg.Username,
-		Password:     cfg.Password,
-		DB:           cfg.DB,
-		DialTimeout:  cfg.DialTimeout,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		PoolSize:     cfg.PoolSize,
+		Addr:                  cfg.Addr,
+		Username:              cfg.Username,
+		Password:              cfg.Password,
+		DB:                    cfg.DB,
+		DialTimeout:           cfg.DialTimeout,
+		ReadTimeout:           cfg.ReadTimeout,
+		WriteTimeout:          cfg.WriteTimeout,
+		PoolSize:              cfg.PoolSize,
+		ContextTimeoutEnabled: true,
 	})
 
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

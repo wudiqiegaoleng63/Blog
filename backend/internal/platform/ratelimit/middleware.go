@@ -1,64 +1,64 @@
-// Package ratelimit provides Redis-based rate limiting middleware.
+// Package ratelimit provides scoped Redis-backed fixed-window rate limiting.
 package ratelimit
 
 import (
 	"context"
-	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/lsy/blog/internal/config"
+	"github.com/lsy/blog/internal/platform/cache"
 	"github.com/lsy/blog/internal/shared/apperr"
 )
 
-// Middleware returns a Gin middleware that enforces a per-identity rate limit.
-// identityFunc extracts the rate limit key (e.g., IP, user ID) from the context.
-func Middleware(cfg config.RateLimitConfig, client *redis.Client, limitPerMinute int, identityFunc func(c *gin.Context) string) gin.HandlerFunc {
+var incrementScript = redis.NewScript(`
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return current
+`)
+
+type IdentityFunc func(*gin.Context) string
+
+// Middleware enforces a scoped limit. Redis failures deliberately fail open to
+// preserve the project's soft-dependency contract; callers should separately
+// protect public ingress with a gateway/WAF in production.
+func Middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if client == nil {
-			// Redis unavailable: allow through (degraded mode).
+		if client == nil || limitPerMinute <= 0 {
 			c.Next()
 			return
 		}
-
-		identity := identityFunc(c)
-		key := fmt.Sprintf("ratelimit:%s:%d", identity, time.Now().UTC().Unix()/60)
-
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 200*time.Millisecond)
+		key := keys.RateLimit(scope, identity(c)+":"+time.Now().UTC().Format("200601021504"))
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 250*time.Millisecond)
 		defer cancel()
-
-		count, err := client.Incr(ctx, key).Result()
+		result, err := incrementScript.Run(ctx, client, []string{key}, int64((2*time.Minute)/time.Millisecond)).Int64()
 		if err != nil {
-			// Redis error in request path: allow through.
 			c.Next()
 			return
 		}
-
-		if count == 1 {
-			// Set a 60-second expiry on first increment (best-effort).
-			client.Expire(ctx, key, 60*time.Second)
-		}
-
-		if int(count) > limitPerMinute {
+		if result > int64(limitPerMinute) {
+			c.Header("Retry-After", "60")
 			c.Abort()
-			c.Error(apperr.RateLimited(""))
+			_ = c.Error(apperr.RateLimited(""))
 			return
 		}
-
 		c.Next()
 	}
 }
 
-// ByIP extracts the client IP for rate limiting.
-func ByIP(c *gin.Context) string {
-	return c.ClientIP()
-}
+func ByIP(c *gin.Context) string { return c.ClientIP() }
 
-// ByUser extracts the authenticated user ID for rate limiting.
 func ByUser(c *gin.Context) string {
-	// Try to get from auth claims first
-	// Falls back to IP if not authenticated
-	return c.ClientIP()
+	if value, exists := c.Get("auth_claims"); exists {
+		if claims, ok := value.(interface{ GetSubject() (string, error) }); ok {
+			if subject, err := claims.GetSubject(); err == nil && subject != "" {
+				return "user:" + subject
+			}
+		}
+	}
+	return "ip:" + strings.TrimSpace(c.ClientIP())
 }

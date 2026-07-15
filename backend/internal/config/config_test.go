@@ -112,6 +112,38 @@ func TestLoad_RejectsNonPositiveRuntimeDurations(t *testing.T) {
 	}
 }
 
+func TestLoad_RejectsNonPositiveRateLimits(t *testing.T) {
+	for _, key := range []string{
+		"RATE_REGISTER_PER_MINUTE", "RATE_LOGIN_PER_MINUTE", "RATE_REFRESH_PER_MINUTE",
+		"RATE_COMMENT_PER_MINUTE", "RATE_AI_PER_MINUTE",
+	} {
+		t.Run(key, func(t *testing.T) {
+			kv := baseEnv()
+			kv[key] = "0"
+			setEnv(t, kv)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Load() error = %v, want error naming %s", err, key)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsOverflowingArgon2Parameters(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{key: "ARGON2_PARALLELISM", value: "257"},
+		{key: "ARGON2_MEMORY_KIB", value: "4294967297"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			kv := baseEnv()
+			kv[tc.key] = tc.value
+			setEnv(t, kv)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted %s=%s", tc.key, tc.value)
+			}
+		})
+	}
+}
+
 func TestLoad_CustomRequestIDHeaderIsAddedToCORS(t *testing.T) {
 	kv := baseEnv()
 	kv["REQUEST_ID_HEADER"] = "X-Correlation-ID"

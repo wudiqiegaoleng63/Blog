@@ -13,6 +13,9 @@ coverage/
 coverage*.txt
 coverage*.html
 
+# Claude Code transient worktrees
+.claude/worktrees/
+
 # Editors and IDEs
 .idea/
 .vscode/

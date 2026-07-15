@@ -191,6 +191,14 @@ func Load() (*Config, error) {
 
 	env := getenv("APP_ENV", "dev")
 	serviceMode := getenv("APP_SERVICE_MODE", "api")
+	argon2MemoryKiB := getenvint("ARGON2_MEMORY_KIB", 64*1024)
+	argon2Iterations := getenvint("ARGON2_ITERATIONS", 3)
+	argon2Parallelism := getenvint("ARGON2_PARALLELISM", 2)
+	if argon2MemoryKiB < 0 || uint64(argon2MemoryKiB) > uint64(^uint32(0)) ||
+		argon2Iterations < 0 || uint64(argon2Iterations) > uint64(^uint32(0)) ||
+		argon2Parallelism < 0 || argon2Parallelism > int(^uint8(0)) {
+		return nil, errors.New("Argon2 parameters exceed their supported integer ranges")
+	}
 
 	c := &Config{
 		App: AppConfig{
@@ -234,9 +242,9 @@ func Load() (*Config, error) {
 			RefreshCookiePath: getenv("AUTH_REFRESH_COOKIE_PATH", "/api/v1/auth"),
 			CookieDomain:      getenv("AUTH_COOKIE_DOMAIN", ""),
 			Secure:            getbool("AUTH_COOKIE_SECURE", env == "production"),
-			Argon2MemoryKiB:   uint32(getenvint("ARGON2_MEMORY_KIB", 64*1024)),
-			Argon2Iterations:  uint32(getenvint("ARGON2_ITERATIONS", 3)),
-			Argon2Parallelism: uint8(getenvint("ARGON2_PARALLELISM", 2)),
+			Argon2MemoryKiB:   uint32(argon2MemoryKiB),
+			Argon2Iterations:  uint32(argon2Iterations),
+			Argon2Parallelism: uint8(argon2Parallelism),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins:   getlist("CORS_ALLOWED_ORIGINS"),
@@ -404,6 +412,9 @@ func (c *Config) Validate() error {
 	if len(c.Auth.JWTSecret) < 32 {
 		errs = append(errs, errors.New("JWT_SECRET must be at least 32 bytes"))
 	}
+	if c.Auth.Argon2MemoryKiB < 8*1024 || c.Auth.Argon2MemoryKiB > 1024*1024 || c.Auth.Argon2Iterations < 1 || c.Auth.Argon2Iterations > 20 || c.Auth.Argon2Parallelism < 1 || c.Auth.Argon2Parallelism > 32 {
+		errs = append(errs, errors.New("Argon2 parameters are outside supported bounds"))
+	}
 	if c.Auth.AccessTokenTTL <= 0 || c.Auth.RefreshTokenTTL <= 0 {
 		errs = append(errs, errors.New("ACCESS_TOKEN_TTL and REFRESH_TOKEN_TTL must be positive"))
 	}
@@ -424,6 +435,9 @@ func (c *Config) Validate() error {
 		break
 	}
 
+	if c.RateLimit.RegisterPerMinute <= 0 || c.RateLimit.LoginPerMinute <= 0 || c.RateLimit.RefreshPerMinute <= 0 || c.RateLimit.CommentPerMinute <= 0 || c.RateLimit.AIPerMinute <= 0 {
+		errs = append(errs, errors.New("RATE_REGISTER_PER_MINUTE, RATE_LOGIN_PER_MINUTE, RATE_REFRESH_PER_MINUTE, RATE_COMMENT_PER_MINUTE, and RATE_AI_PER_MINUTE must be positive"))
+	}
 	if c.Jobs.MaxAttempts <= 0 || c.Jobs.LockSeconds <= 0 || c.Jobs.BatchSize <= 0 {
 		errs = append(errs, errors.New("JOBS_MAX_ATTEMPTS, JOBS_LOCK_SECONDS, JOBS_BATCH_SIZE must be positive"))
 	}

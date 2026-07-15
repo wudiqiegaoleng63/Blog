@@ -2,8 +2,8 @@ package auth
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -71,7 +71,7 @@ func (r *Repository) FindUserByUsername(ctx context.Context, username string) (*
 func (r *Repository) FindUserByPublicID(ctx context.Context, publicID string) (*domain.User, error) {
 	var user domain.User
 	err := r.db.WithContext(ctx).
-		Where("public_id = ?", publicID).
+		Where("public_id = ? AND deleted_at IS NULL", publicID).
 		First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -119,11 +119,12 @@ func (r *Repository) CreateRefreshToken(ctx context.Context, rt *domain.RefreshT
 	return r.db.WithContext(ctx).Create(rt).Error
 }
 
-// FindRefreshTokenByHash looks up a non-revoked refresh token by its hash.
+// FindRefreshTokenByHash looks up an unexpired refresh token by its hash.
+// Revoked rows are returned so replay detection can revoke their whole family.
 func (r *Repository) FindRefreshTokenByHash(ctx context.Context, tokenHash []byte) (*domain.RefreshToken, error) {
 	var rt domain.RefreshToken
 	err := r.db.WithContext(ctx).
-		Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", tokenHash, time.Now().UTC()).
+		Where("token_hash = ? AND expires_at > ?", tokenHash, time.Now().UTC()).
 		First(&rt).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -140,16 +141,28 @@ func (r *Repository) RevokeTokenFamily(ctx context.Context, familyID string) err
 		Update("revoked_at", now).Error
 }
 
-// SetTokenReplaced marks a refresh token as replaced by another.
-func (r *Repository) SetTokenReplaced(ctx context.Context, tokenID uint64, replacedByID uint64) error {
-	now := time.Now().UTC()
-	return r.db.WithContext(ctx).
-		Model(&domain.RefreshToken{}).
-		Where("id = ?", tokenID).
-		Updates(map[string]interface{}{
-			"revoked_at":     now,
-			"replaced_by_id": replacedByID,
-		}).Error
+// RotateRefreshToken atomically inserts the replacement and revokes the current token.
+func (r *Repository) RotateRefreshToken(ctx context.Context, currentTokenID uint64, replacement *domain.RefreshToken) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		replacement.CreatedAt = time.Now().UTC()
+		if err := tx.Create(replacement).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&domain.RefreshToken{}).
+			Where("id = ? AND revoked_at IS NULL", currentTokenID).
+			Updates(map[string]interface{}{
+				"revoked_at":     time.Now().UTC(),
+				"replaced_by_id": replacement.ID,
+				"last_used_at":   time.Now().UTC(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrTokenInvalid
+		}
+		return nil
+	})
 }
 
 // IncrementTokenVersion bumps the user's token_version to invalidate all JWTs.
@@ -166,33 +179,17 @@ func isDuplicate(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return contains(msg, "Duplicate entry") || contains(msg, "UNIQUE constraint") || contains(msg, "duplicate key")
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate entry") || strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate key")
 }
 
 func detectDuplicateError(err error) error {
-	msg := err.Error()
-	if contains(msg, "email_normalized") {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "email_normalized") {
 		return ErrEmailTaken
 	}
-	if contains(msg, "username") {
+	if strings.Contains(message, "username") {
 		return ErrUsernameTaken
 	}
 	return ErrEmailTaken
 }
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// Compile-time check
-var _ = sql.ErrNoRows

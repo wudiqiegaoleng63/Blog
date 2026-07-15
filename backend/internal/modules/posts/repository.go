@@ -3,9 +3,7 @@ package posts
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
-	"unicode"
 
 	"gorm.io/gorm"
 
@@ -45,21 +43,29 @@ func (r *Repository) CreatePost(ctx context.Context, post *domain.Post, category
 }
 
 // UpdatePost updates an existing post and replaces its categories and tags.
-func (r *Repository) UpdatePost(ctx context.Context, post *domain.Post, categoryIDs, tagIDs []uint64) error {
+func (r *Repository) UpdatePost(ctx context.Context, post *domain.Post, categoryIDs, tagIDs *[]uint64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(post).Error; err != nil {
 			return err
 		}
-		tx.Exec("DELETE FROM post_categories WHERE post_id = ?", post.ID)
-		tx.Exec("DELETE FROM post_tags WHERE post_id = ?", post.ID)
-		for _, cid := range categoryIDs {
-			if err := tx.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", post.ID, cid).Error; err != nil {
+		if categoryIDs != nil {
+			if err := tx.Exec("DELETE FROM post_categories WHERE post_id = ?", post.ID).Error; err != nil {
 				return err
 			}
+			for _, categoryID := range *categoryIDs {
+				if err := tx.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", post.ID, categoryID).Error; err != nil {
+					return err
+				}
+			}
 		}
-		for _, tid := range tagIDs {
-			if err := tx.Exec("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)", post.ID, tid).Error; err != nil {
+		if tagIDs != nil {
+			if err := tx.Exec("DELETE FROM post_tags WHERE post_id = ?", post.ID).Error; err != nil {
 				return err
+			}
+			for _, tagID := range *tagIDs {
+				if err := tx.Exec("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)", post.ID, tagID).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -70,6 +76,7 @@ func (r *Repository) UpdatePost(ctx context.Context, post *domain.Post, category
 func (r *Repository) FindPostBySlug(ctx context.Context, slug string) (*domain.Post, error) {
 	var post domain.Post
 	err := r.db.WithContext(ctx).
+		Preload("Author").
 		Preload("Categories").
 		Preload("Tags").
 		Where("slug = ? AND deleted_at IS NULL", slug).
@@ -78,6 +85,28 @@ func (r *Repository) FindPostBySlug(ctx context.Context, slug string) (*domain.P
 		return nil, nil
 	}
 	return &post, err
+}
+
+// FindPostForComments loads only the fields needed to authorize comment
+// access, avoiding relation preloads on the public comments hot path.
+func (r *Repository) FindPostForComments(ctx context.Context, slug string) (*domain.Post, error) {
+	var post domain.Post
+	err := r.db.WithContext(ctx).
+		Select("id", "status", "visibility").
+		Where("slug = ? AND deleted_at IS NULL", slug).
+		First(&post).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &post, err
+}
+
+// PostSlugExists checks all rows, including soft-deleted posts, because the
+// database unique constraint reserves a slug for the lifetime of the row.
+func (r *Repository) PostSlugExists(ctx context.Context, slug string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Unscoped().Model(&domain.Post{}).Where("slug = ?", slug).Count(&count).Error
+	return count > 0, err
 }
 
 // FindPostByPublicID returns a post by its public ID.
@@ -148,6 +177,15 @@ func (r *Repository) FindCategoryBySlug(ctx context.Context, slug string) (*doma
 	return &cat, err
 }
 
+func (r *Repository) FindCategoryByName(ctx context.Context, name string) (*domain.Category, error) {
+	var cat domain.Category
+	err := r.db.WithContext(ctx).Where("name = ?", name).First(&cat).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &cat, err
+}
+
 // CreateCategory inserts a new category.
 func (r *Repository) CreateCategory(ctx context.Context, cat *domain.Category) error {
 	return r.db.WithContext(ctx).Create(cat).Error
@@ -163,13 +201,13 @@ func (r *Repository) DeleteCategory(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&domain.Category{}, id).Error
 }
 
-// FindCategoriesByIDs returns categories matching the given IDs.
-func (r *Repository) FindCategoriesByIDs(ctx context.Context, ids []uint64) ([]domain.Category, error) {
-	if len(ids) == 0 {
+// FindCategoriesByPublicIDs returns categories matching the public API IDs.
+func (r *Repository) FindCategoriesByPublicIDs(ctx context.Context, publicIDs []string) ([]domain.Category, error) {
+	if len(publicIDs) == 0 {
 		return nil, nil
 	}
 	var cats []domain.Category
-	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&cats).Error
+	err := r.db.WithContext(ctx).Where("public_id IN ?", publicIDs).Find(&cats).Error
 	return cats, err
 }
 
@@ -192,6 +230,15 @@ func (r *Repository) FindTagBySlug(ctx context.Context, slug string) (*domain.Ta
 	return &tag, err
 }
 
+func (r *Repository) FindTagByName(ctx context.Context, name string) (*domain.Tag, error) {
+	var tag domain.Tag
+	err := r.db.WithContext(ctx).Where("name = ?", name).First(&tag).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &tag, err
+}
+
 // CreateTag inserts a new tag.
 func (r *Repository) CreateTag(ctx context.Context, tag *domain.Tag) error {
 	return r.db.WithContext(ctx).Create(tag).Error
@@ -207,30 +254,32 @@ func (r *Repository) DeleteTag(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&domain.Tag{}, id).Error
 }
 
-// FindTagsByIDs returns tags matching the given IDs.
-func (r *Repository) FindTagsByIDs(ctx context.Context, ids []uint64) ([]domain.Tag, error) {
-	if len(ids) == 0 {
+// FindTagsByPublicIDs returns tags matching the public API IDs.
+func (r *Repository) FindTagsByPublicIDs(ctx context.Context, publicIDs []string) ([]domain.Tag, error) {
+	if len(publicIDs) == 0 {
 		return nil, nil
 	}
 	var tags []domain.Tag
-	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&tags).Error
+	err := r.db.WithContext(ctx).Where("public_id IN ?", publicIDs).Find(&tags).Error
 	return tags, err
 }
 
-// --- Slug generation ---
-
-var slugRE = regexp.MustCompile(`[^a-z0-9]+`)
-
-// GenerateSlug creates a URL-safe slug from a title.
+// GenerateSlug returns a conservative ASCII slug. Callers must provide a
+// non-empty fallback for titles that contain no ASCII letters or digits.
 func GenerateSlug(title string) string {
-	slug := strings.ToLower(title)
-	slug = strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == ' ' {
-			return r
+	var builder strings.Builder
+	separator := false
+	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			if separator && builder.Len() > 0 {
+				builder.WriteByte('-')
+			}
+			builder.WriteRune(r)
+			separator = false
+		default:
+			separator = true
 		}
-		return ' '
-	}, slug)
-	slug = slugRE.ReplaceAllString(strings.TrimSpace(slug), "-")
-	slug = strings.Trim(slug, "-")
-	return slug
+	}
+	return strings.Trim(builder.String(), "-")
 }

@@ -1,151 +1,154 @@
-// Package domain 定义纯领域模型，不依赖任何框架或数据库驱动。
-// 所有结构体仅表达业务概念与约束，I/O 由各模块的 repository 层负责。
+// Package domain defines framework-independent domain models.
 package domain
 
 import "time"
 
-// --- User & Auth ---
-
+// User is the persisted user account. Sensitive and internal fields are never
+// serialized directly; API handlers expose dedicated response DTOs.
 type User struct {
-	ID              uint64
-	PublicID        string
-	Email           string
-	EmailNormalized string
-	Username        string
-	PasswordHash    string
-	Role            string // "user" | "admin"
-	Status          string // "active" | "banned" | "deleted"
-	EmailVerifiedAt *time.Time
-	TokenVersion    uint64
-	LastLoginAt     *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	DeletedAt       *time.Time
+	ID              uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PublicID        string     `json:"public_id" gorm:"column:public_id"`
+	Email           string     `json:"-" gorm:"column:email"`
+	EmailNormalized string     `json:"-" gorm:"column:email_normalized"`
+	Username        string     `json:"username" gorm:"column:username"`
+	PasswordHash    string     `json:"-" gorm:"column:password_hash"`
+	Role            string     `json:"role" gorm:"column:role"`
+	Status          string     `json:"-" gorm:"column:status"`
+	EmailVerifiedAt *time.Time `json:"-" gorm:"column:email_verified_at"`
+	TokenVersion    uint64     `json:"-" gorm:"column:token_version"`
+	LastLoginAt     *time.Time `json:"-" gorm:"column:last_login_at"`
+	CreatedAt       time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt       time.Time  `json:"-" gorm:"column:updated_at"`
+	DeletedAt       *time.Time `json:"-" gorm:"column:deleted_at"`
 }
+
+func (User) TableName() string { return "users" }
 
 type UserProfile struct {
-	UserID      uint64
-	DisplayName string
-	Bio         *string
-	AvatarURL   *string
-	WebsiteURL  *string
-	Location    *string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	UserID      uint64    `json:"-" gorm:"primaryKey;column:user_id"`
+	DisplayName string    `json:"display_name" gorm:"column:display_name"`
+	Bio         *string   `json:"bio,omitempty" gorm:"column:bio"`
+	AvatarURL   *string   `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
+	WebsiteURL  *string   `json:"website_url,omitempty" gorm:"column:website_url"`
+	Location    *string   `json:"location,omitempty" gorm:"column:location"`
+	CreatedAt   time.Time `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"column:updated_at"`
 }
+
+func (UserProfile) TableName() string { return "user_profiles" }
 
 type RefreshToken struct {
-	ID            uint64
-	PublicID      string
-	UserID        uint64
-	FamilyID      string
-	TokenHash     []byte
-	ExpiresAt     time.Time
-	RevokedAt     *time.Time
-	ReplacedByID  *uint64
-	CreatedAt     time.Time
-	LastUsedAt    *time.Time
-	CreatedIPHash []byte
-	UserAgentHash []byte
+	ID            uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PublicID      string     `json:"-" gorm:"column:public_id"`
+	UserID        uint64     `json:"-" gorm:"column:user_id"`
+	FamilyID      string     `json:"-" gorm:"column:family_id"`
+	TokenHash     []byte     `json:"-" gorm:"column:token_hash"`
+	ExpiresAt     time.Time  `json:"-" gorm:"column:expires_at"`
+	RevokedAt     *time.Time `json:"-" gorm:"column:revoked_at"`
+	ReplacedByID  *uint64    `json:"-" gorm:"column:replaced_by_id"`
+	CreatedAt     time.Time  `json:"-" gorm:"column:created_at"`
+	LastUsedAt    *time.Time `json:"-" gorm:"column:last_used_at"`
+	CreatedIPHash []byte     `json:"-" gorm:"column:created_ip_hash"`
+	UserAgentHash []byte     `json:"-" gorm:"column:user_agent_hash"`
 }
 
-// --- Post ---
+func (RefreshToken) TableName() string { return "refresh_tokens" }
 
+// Post is a blog post with optional preloaded public relations.
 type Post struct {
-	ID              uint64
-	PublicID        string
-	AuthorID        uint64
-	Title           string
-	Slug            string
-	Summary         *string
-	ContentMarkdown string
-	ContentHTML     string
-	CoverURL        *string
-	Status          string // "draft" | "published" | "archived"
-	Visibility      string // "public" | "private"
-	ContentVersion  uint64
-	PublishedAt     *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	DeletedAt       *time.Time
-	// Relations（可选填充）
-	Author     *User
-	Categories []Category
-	Tags       []Tag
+	ID              uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PublicID        string     `json:"public_id" gorm:"column:public_id"`
+	AuthorID        uint64     `json:"-" gorm:"column:author_id"`
+	Title           string     `json:"title" gorm:"column:title"`
+	Slug            string     `json:"slug" gorm:"column:slug"`
+	Summary         *string    `json:"summary,omitempty" gorm:"column:summary"`
+	ContentMarkdown string     `json:"content_markdown" gorm:"column:content_markdown"`
+	ContentHTML     string     `json:"content_html" gorm:"column:content_html"`
+	CoverURL        *string    `json:"cover_url,omitempty" gorm:"column:cover_url"`
+	Status          string     `json:"status" gorm:"column:status"`
+	Visibility      string     `json:"visibility" gorm:"column:visibility"`
+	ContentVersion  uint64     `json:"content_version" gorm:"column:content_version"`
+	PublishedAt     *time.Time `json:"published_at,omitempty" gorm:"column:published_at"`
+	CreatedAt       time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" gorm:"column:updated_at"`
+	DeletedAt       *time.Time `json:"-" gorm:"column:deleted_at"`
+	Author          *User      `json:"author,omitempty" gorm:"foreignKey:AuthorID;references:ID"`
+	Categories      []Category `json:"categories,omitempty" gorm:"many2many:post_categories;joinForeignKey:PostID;joinReferences:CategoryID"`
+	Tags            []Tag      `json:"tags,omitempty" gorm:"many2many:post_tags;joinForeignKey:PostID;joinReferences:TagID"`
 }
+
+func (Post) TableName() string { return "posts" }
 
 type Category struct {
-	ID          uint64
-	PublicID    string
-	Name        string
-	Slug        string
-	Description *string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          uint64    `json:"-" gorm:"primaryKey;column:id"`
+	PublicID    string    `json:"public_id" gorm:"column:public_id"`
+	Name        string    `json:"name" gorm:"column:name"`
+	Slug        string    `json:"slug" gorm:"column:slug"`
+	Description *string   `json:"description,omitempty" gorm:"column:description"`
+	CreatedAt   time.Time `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"column:updated_at"`
 }
+
+func (Category) TableName() string { return "categories" }
 
 type Tag struct {
-	ID        uint64
-	PublicID  string
-	Name      string
-	Slug      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID        uint64    `json:"-" gorm:"primaryKey;column:id"`
+	PublicID  string    `json:"public_id" gorm:"column:public_id"`
+	Name      string    `json:"name" gorm:"column:name"`
+	Slug      string    `json:"slug" gorm:"column:slug"`
+	CreatedAt time.Time `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"column:updated_at"`
 }
 
-// --- Comment ---
+func (Tag) TableName() string { return "tags" }
 
 type Comment struct {
-	ID            uint64
-	PublicID      string
-	PostID        uint64
-	UserID        uint64
-	ParentID      *uint64
-	BodyMarkdown  string
-	BodyHTML      string
-	Status        string // "pending" | "approved" | "rejected" | "spam"
-	ModeratedBy   *uint64
-	ModeratedAt   *time.Time
-	CreatedIPHash []byte
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     *time.Time
-	// Relations
-	Author   *User
-	Children []Comment
+	ID            uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PublicID      string     `json:"public_id" gorm:"column:public_id"`
+	PostID        uint64     `json:"-" gorm:"column:post_id"`
+	UserID        uint64     `json:"-" gorm:"column:user_id"`
+	ParentID      *uint64    `json:"-" gorm:"column:parent_id"`
+	BodyMarkdown  string     `json:"body_markdown" gorm:"column:body_markdown"`
+	BodyHTML      string     `json:"body_html" gorm:"column:body_html"`
+	Status        string     `json:"status" gorm:"column:status"`
+	ModeratedBy   *uint64    `json:"-" gorm:"column:moderated_by"`
+	ModeratedAt   *time.Time `json:"moderated_at,omitempty" gorm:"column:moderated_at"`
+	CreatedIPHash []byte     `json:"-" gorm:"column:created_ip_hash"`
+	CreatedAt     time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt     time.Time  `json:"updated_at" gorm:"column:updated_at"`
+	DeletedAt     *time.Time `json:"-" gorm:"column:deleted_at"`
+	Author        *User      `json:"author,omitempty" gorm:"foreignKey:UserID;references:ID"`
+	Children      []Comment  `json:"children,omitempty" gorm:"foreignKey:ParentID;references:ID"`
 }
 
-// --- Job ---
+func (Comment) TableName() string { return "comments" }
 
 type Job struct {
-	ID          uint64
-	PublicID    string
-	JobType     string
-	DedupKey    *string
-	PayloadJSON []byte
-	Status      string // "pending" | "running" | "completed" | "failed" | "dead"
-	Priority    int
-	Attempts    int
-	MaxAttempts int
-	RunAfter    time.Time
-	LockedBy    *string
-	LockedAt    *time.Time
-	LastError   *string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	FinishedAt  *time.Time
+	ID          uint64     `json:"-" gorm:"primaryKey;column:id"`
+	PublicID    string     `json:"public_id" gorm:"column:public_id"`
+	JobType     string     `json:"job_type" gorm:"column:job_type"`
+	DedupKey    *string    `json:"-" gorm:"column:dedup_key"`
+	PayloadJSON []byte     `json:"payload" gorm:"column:payload_json"`
+	Status      string     `json:"status" gorm:"column:status"`
+	Priority    int        `json:"priority" gorm:"column:priority"`
+	Attempts    int        `json:"attempts" gorm:"column:attempts"`
+	MaxAttempts int        `json:"max_attempts" gorm:"column:max_attempts"`
+	RunAfter    time.Time  `json:"run_after" gorm:"column:run_after"`
+	LockedBy    *string    `json:"-" gorm:"column:locked_by"`
+	LockedAt    *time.Time `json:"-" gorm:"column:locked_at"`
+	LastError   *string    `json:"-" gorm:"column:last_error"`
+	CreatedAt   time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt   time.Time  `json:"updated_at" gorm:"column:updated_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty" gorm:"column:finished_at"`
 }
 
-// --- Auth Tokens ---
+func (Job) TableName() string { return "background_jobs" }
 
 type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ExpiresIn    int64  `json:"expires_in"`
-	TokenType    string `json:"token_type"`
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int64  `json:"expires_in"`
+	TokenType   string `json:"token_type"`
 }
-
-// --- Pagination ---
 
 type Pagination struct {
 	Page       int `json:"page"`

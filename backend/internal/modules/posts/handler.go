@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lsy/blog/internal/config"
 	"github.com/lsy/blog/internal/platform/httpserver"
 	"github.com/lsy/blog/internal/shared/apperr"
 )
@@ -17,16 +16,16 @@ type Module struct {
 }
 
 // NewModule creates a posts module.
-func NewModule(cfg *config.Config, repo *Repository) *Module {
-	return &Module{svc: NewService(cfg, repo)}
+func NewModule(repo *Repository) *Module {
+	return &Module{svc: NewService(repo)}
 }
 
 // Register mounts all routes under /api/v1.
-func (m *Module) Register(r *gin.Engine, authMW gin.HandlerFunc, adminMW gin.HandlerFunc) {
+func (m *Module) Register(r *gin.Engine, authMW gin.HandlerFunc, adminMW gin.HandlerFunc, optionalAuthMW gin.HandlerFunc) {
 	v1 := r.Group("/api/v1")
 
 	v1.GET("/posts", m.list)
-	v1.GET("/posts/:slug", m.get)
+	v1.GET("/posts/:slug", optionalAuthMW, m.get)
 	v1.POST("/posts", authMW, m.create)
 	v1.PUT("/posts/:slug", authMW, m.update)
 	v1.DELETE("/posts/:slug", authMW, m.delete)

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/lsy/blog/internal/bootstrap"
 	"github.com/lsy/blog/internal/config"
 	"github.com/lsy/blog/internal/domain"
+	"github.com/lsy/blog/internal/modules/comments"
 	"github.com/lsy/blog/internal/platform/jobs"
 )
 
@@ -45,15 +47,9 @@ func main() {
 
 	consumer := jobs.NewConsumer(c.DB, cfg.Jobs)
 	registry := jobs.NewRegistry()
-
-	// Stage 1: register placeholder handlers for known job types.
-	registry.Register("comment_moderation", func(ctx context.Context, job *domain.Job) error {
-		// Placeholder — real moderation logic in a future stage.
-		return nil
-	})
-	registry.Register("post_index", func(ctx context.Context, job *domain.Job) error {
-		// Placeholder — real indexing in Stage 3.
-		return nil
+	commentsRepo := comments.NewRepository(c.DB, cfg.Jobs.MaxAttempts)
+	registry.Register(comments.ModerationJobType, func(ctx context.Context, job *domain.Job) error {
+		return commentsRepo.Moderate(ctx, job.PayloadJSON)
 	})
 
 	c.Logger.Info("worker started (stage 1)",
@@ -64,12 +60,26 @@ func main() {
 
 	poll := time.NewTicker(consumer.PollInterval())
 	defer poll.Stop()
+	reapInterval := time.Duration(cfg.Jobs.LockSeconds) * time.Second / 2
+	if reapInterval < consumer.PollInterval() {
+		reapInterval = consumer.PollInterval()
+	}
+	reap := time.NewTicker(reapInterval)
+	defer reap.Stop()
+
+	if err := consumer.ReapStaleJobs(rootCtx); err != nil {
+		c.Logger.Warn("initial stale job recovery failed", "error", err)
+	}
 
 	for {
 		select {
 		case <-rootCtx.Done():
 			c.Logger.Info("worker shutting down")
 			return
+		case <-reap.C:
+			if err := consumer.ReapStaleJobs(rootCtx); err != nil {
+				c.Logger.Warn("stale job recovery failed", "error", err)
+			}
 		case <-poll.C:
 			claimed, err := consumer.Claim(rootCtx)
 			if err != nil {
@@ -77,23 +87,35 @@ func main() {
 				continue
 			}
 
-			for _, job := range claimed {
-				jobCtx, cancel := context.WithTimeout(rootCtx, 5*time.Minute)
-				err := registry.Handle(jobCtx, &job)
-				cancel()
+			var batch sync.WaitGroup
+			for i := range claimed {
+				job := claimed[i]
+				batch.Add(1)
+				go func() {
+					defer batch.Done()
+					// Finish or fail a handler before its lease can be reaped. Longer job
+					// types must add lease renewal before increasing this timeout.
+					jobTimeout := time.Duration(cfg.Jobs.LockSeconds) * time.Second / 2
+					jobCtx, cancel := context.WithTimeout(rootCtx, jobTimeout)
+					err := registry.Handle(jobCtx, &job)
+					cancel()
 
-				if err != nil {
-					c.Logger.Warn("job failed",
-						"job_id", job.PublicID,
-						"job_type", job.JobType,
-						"attempt", job.Attempts,
-						"error", err,
-					)
-					_ = consumer.Fail(context.Background(), job.ID, err.Error())
-				} else {
-					_ = consumer.Complete(context.Background(), job.ID)
-				}
+					if err != nil {
+						c.Logger.Warn("job failed",
+							"job_id", job.PublicID,
+							"job_type", job.JobType,
+							"attempt", job.Attempts,
+							"error", err,
+						)
+						if failErr := consumer.Fail(context.Background(), job.ID, err.Error()); failErr != nil {
+							c.Logger.Error("record job failure failed", "job_id", job.PublicID, "error", failErr)
+						}
+					} else if completeErr := consumer.Complete(context.Background(), job.ID); completeErr != nil {
+						c.Logger.Error("complete job failed", "job_id", job.PublicID, "error", completeErr)
+					}
+				}()
 			}
+			batch.Wait()
 
 			if len(claimed) > 0 {
 				c.Logger.Info("processed jobs", "count", len(claimed))

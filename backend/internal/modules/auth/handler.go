@@ -19,16 +19,14 @@ func NewModule(cfg *config.Config, repo *Repository) *Module {
 	return &Module{svc: NewService(cfg, repo)}
 }
 
-// Register mounts auth routes under the given router group.
-func (m *Module) Register(r *gin.Engine) {
+// Register mounts public and protected authentication routes.
+func (m *Module) Register(r *gin.Engine, authMW, registerLimit, loginLimit, refreshLimit gin.HandlerFunc) {
 	v1 := r.Group("/api/v1/auth")
-	{
-		v1.POST("/register", m.register)
-		v1.POST("/login", m.login)
-		v1.POST("/refresh", m.refresh)
-		v1.POST("/logout", m.logout)
-		v1.GET("/me", m.me)
-	}
+	v1.POST("/register", registerLimit, m.register)
+	v1.POST("/login", loginLimit, m.login)
+	v1.POST("/refresh", refreshLimit, m.refresh)
+	v1.POST("/logout", m.logout)
+	v1.GET("/me", authMW, m.me)
 }
 
 func (m *Module) register(c *gin.Context) {
@@ -93,7 +91,7 @@ func (m *Module) me(c *gin.Context) {
 		c.Error(apperr.Unauthorized(""))
 		return
 	}
-	user, profile, err := m.svc.Me(c, claims.UserID)
+	user, profile, err := m.svc.Me(c, claims.UserID, claims.TokenVer)
 	if err != nil {
 		c.Error(err)
 		return
@@ -118,10 +116,6 @@ func getRefreshToken(c *gin.Context, cookieName string) (string, error) {
 	cookie, err := c.Cookie(cookieName)
 	if err == nil && cookie != "" {
 		return cookie, nil
-	}
-	header := c.GetHeader("X-Refresh-Token")
-	if header != "" {
-		return header, nil
 	}
 	return "", err
 }

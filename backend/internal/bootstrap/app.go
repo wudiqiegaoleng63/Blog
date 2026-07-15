@@ -73,10 +73,6 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 			_ = c.Close(context.Background())
 			return nil, err
 		}
-		// Install rate-limit middleware before business routes.
-		rl := ratelimit.Middleware(cfg.RateLimit, redisClient, cfg.RateLimit.LoginPerMinute, ratelimit.ByIP)
-		engine.Router().Use(rl)
-
 		c.engine = engine
 		if err := c.registerModules(); err != nil {
 			_ = c.Close(context.Background())
@@ -103,19 +99,24 @@ func (c *Container) registerModules() error {
 	// --- Stage 1: 认证与博客领域 ---
 
 	authRepo := authmod.NewRepository(c.DB)
-	authModule := authmod.NewModule(c.Cfg, authRepo)
-	authModule.Register(router)
+	authMW := authmod.RequireAuth(c.Cfg.Auth, authRepo)
+	optionalAuthMW := authmod.OptionalAuth(c.Cfg.Auth, authRepo)
+	adminMW := authmod.RequireAdmin(c.Cfg.Auth, authRepo)
+	registerLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:register", c.Cfg.RateLimit.RegisterPerMinute, ratelimit.ByIP)
+	loginLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:login", c.Cfg.RateLimit.LoginPerMinute, ratelimit.ByIP)
+	refreshLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:refresh", c.Cfg.RateLimit.RefreshPerMinute, ratelimit.ByIP)
 
-	authMW := authmod.RequireAuth(c.Cfg.Auth)
-	adminMW := authmod.RequireAdmin(c.Cfg.Auth)
+	authModule := authmod.NewModule(c.Cfg, authRepo)
+	authModule.Register(router, authMW, registerLimit, loginLimit, refreshLimit)
 
 	postsRepo := posts.NewRepository(c.DB)
-	postsModule := posts.NewModule(c.Cfg, postsRepo)
-	postsModule.Register(router, authMW, adminMW)
+	postsModule := posts.NewModule(postsRepo)
+	postsModule.Register(router, authMW, adminMW, optionalAuthMW)
 
-	commentsRepo := comments.NewRepository(c.DB)
-	commentsModule := comments.NewModule(c.Cfg, commentsRepo)
-	commentsModule.Register(router, authMW)
+	commentsRepo := comments.NewRepository(c.DB, c.Cfg.Jobs.MaxAttempts)
+	commentsModule := comments.NewModule(commentsRepo, postsRepo)
+	commentLimit := ratelimit.Middleware(c.Redis, c.Keys, "comment:write", c.Cfg.RateLimit.CommentPerMinute, ratelimit.ByUser)
+	commentsModule.Register(router, authMW, commentLimit)
 
 	return nil
 }

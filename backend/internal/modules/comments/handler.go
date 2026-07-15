@@ -1,32 +1,26 @@
 package comments
 
 import (
-	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lsy/blog/internal/config"
+	"github.com/lsy/blog/internal/modules/posts"
 	"github.com/lsy/blog/internal/platform/httpserver"
 	"github.com/lsy/blog/internal/shared/apperr"
 )
 
-// Module wires comment routes into the API.
-type Module struct {
-	svc *Service
+type Module struct{ svc *Service }
+
+func NewModule(repo *Repository, postsRepo *posts.Repository) *Module {
+	return &Module{svc: NewService(repo, postsRepo)}
 }
 
-// NewModule creates a comments module.
-func NewModule(cfg *config.Config, repo *Repository) *Module {
-	return &Module{svc: NewService(repo)}
-}
-
-// Register mounts comment routes under /api/v1.
-func (m *Module) Register(r *gin.Engine, authMW gin.HandlerFunc) {
+func (m *Module) Register(r *gin.Engine, authMW, commentRateLimit gin.HandlerFunc) {
 	v1 := r.Group("/api/v1")
-
-	v1.POST("/posts/:slug/comments", authMW, m.create)
+	v1.POST("/posts/:slug/comments", authMW, commentRateLimit, m.create)
 	v1.GET("/posts/:slug/comments", m.list)
-	v1.PUT("/comments/:id", authMW, m.update)
+	v1.PUT("/comments/:id", authMW, commentRateLimit, m.update)
 	v1.DELETE("/comments/:id", authMW, m.delete)
 }
 
@@ -36,8 +30,7 @@ func (m *Module) create(c *gin.Context) {
 		c.Error(apperr.Validation("invalid request body", nil))
 		return
 	}
-	input.PostPublicID = c.Param("slug")
-	comment, err := m.svc.Create(c, input)
+	comment, err := m.svc.Create(c, c.Param("slug"), input)
 	if err != nil {
 		c.Error(err)
 		return
@@ -46,11 +39,9 @@ func (m *Module) create(c *gin.Context) {
 }
 
 func (m *Module) list(c *gin.Context) {
-	page, size := 1, 20
-	// List by post slug — need to resolve post ID first
-	// This is intentionally simplified for now; the full implementation
-	// resolves the post slug to a numeric ID via the posts repository
-	result, err := m.svc.ListByPost(c, 0, page, size)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	result, err := m.svc.ListByPost(c, c.Param("slug"), page, pageSize)
 	if err != nil {
 		c.Error(err)
 		return
@@ -81,5 +72,3 @@ func (m *Module) delete(c *gin.Context) {
 	}
 	httpserver.NoContent(c)
 }
-
-var _ = http.StatusOK
