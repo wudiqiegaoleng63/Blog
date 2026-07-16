@@ -25,7 +25,8 @@ import (
 const ModerationJobType = "comment_moderation"
 
 type ModerationPayload struct {
-	CommentID string `json:"comment_id"`
+	CommentID string    `json:"comment_id"`
+	Revision  time.Time `json:"revision"`
 }
 
 type Repository struct {
@@ -43,8 +44,10 @@ func (r *Repository) Create(ctx context.Context, comment *domain.Comment) error 
 		if err := tx.Create(comment).Error; err != nil {
 			return err
 		}
-		_, err := r.producer.EnqueueTx(ctx, tx, ModerationJobType, ModerationPayload{CommentID: comment.PublicID},
-			jobs.WithDedupKey("comment:"+comment.PublicID))
+		_, err := r.producer.EnqueueTx(ctx, tx, ModerationJobType, ModerationPayload{
+			CommentID: comment.PublicID,
+			Revision:  comment.UpdatedAt,
+		}, jobs.WithDedupKey("comment:"+comment.PublicID))
 		return err
 	})
 }
@@ -80,7 +83,10 @@ func (r *Repository) Update(ctx context.Context, comment *domain.Comment) error 
 			return err
 		}
 		dedupKey := fmt.Sprintf("comment:%s:%d", comment.PublicID, comment.UpdatedAt.UnixNano())
-		_, err := r.producer.EnqueueTx(ctx, tx, ModerationJobType, ModerationPayload{CommentID: comment.PublicID}, jobs.WithDedupKey(dedupKey))
+		_, err := r.producer.EnqueueTx(ctx, tx, ModerationJobType, ModerationPayload{
+			CommentID: comment.PublicID,
+			Revision:  comment.UpdatedAt,
+		}, jobs.WithDedupKey(dedupKey))
 		return err
 	})
 }
@@ -92,8 +98,8 @@ func (r *Repository) Moderate(ctx context.Context, payloadJSON []byte) error {
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 		return fmt.Errorf("comments: decode moderation payload: %w", err)
 	}
-	if payload.CommentID == "" {
-		return errors.New("comments: moderation payload has empty comment_id")
+	if payload.CommentID == "" || payload.Revision.IsZero() {
+		return errors.New("comments: moderation payload requires comment_id and revision")
 	}
 
 	var comment domain.Comment
@@ -104,15 +110,15 @@ func (r *Repository) Moderate(ctx context.Context, payloadJSON []byte) error {
 	if err != nil {
 		return err
 	}
-	if comment.DeletedAt != nil || comment.Status != "pending" {
+	if comment.DeletedAt != nil || comment.Status != "pending" || !comment.UpdatedAt.Equal(payload.Revision) {
 		return nil
 	}
 	if strings.TrimSpace(comment.BodyHTML) == "" {
 		return errors.New("comments: sanitized comment body is empty")
 	}
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	result := r.db.WithContext(ctx).Model(&domain.Comment{}).
-		Where("id = ? AND status = 'pending' AND deleted_at IS NULL AND updated_at = ?", comment.ID, comment.UpdatedAt).
+		Where("id = ? AND status = 'pending' AND deleted_at IS NULL AND updated_at = ?", comment.ID, payload.Revision).
 		Updates(map[string]interface{}{
 			"status": "approved", "moderated_at": now, "updated_at": now,
 		})
@@ -181,7 +187,7 @@ func (s *Service) Create(ctx *gin.Context, postSlug string, input CreateCommentI
 		}
 		parentID = &parent.ID
 	}
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	comment := &domain.Comment{
 		PublicID: ids.MustNewULID(), PostID: post.ID, UserID: user.ID, ParentID: parentID,
 		BodyMarkdown: body, BodyHTML: html, Status: "pending", CreatedAt: now, UpdatedAt: now,
@@ -218,7 +224,7 @@ func (s *Service) Update(ctx *gin.Context, commentID, body string) (*domain.Comm
 	comment.BodyMarkdown, comment.BodyHTML = body, html
 	comment.Status = "pending"
 	comment.ModeratedAt, comment.ModeratedBy = nil, nil
-	comment.UpdatedAt = time.Now().UTC()
+	comment.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := s.repo.Update(ctx.Request.Context(), comment); err != nil {
 		return nil, apperr.Internal(err, "")
 	}

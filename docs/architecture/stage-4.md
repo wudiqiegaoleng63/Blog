@@ -1,5 +1,7 @@
 # Stage 4 架构说明
 
+> Stage 4 已完成。本文记录 Chat/RAG 契约；真实外部依赖故障演练和生产 SLO 追踪属于 `stage-5.md`。
+
 ## 1. 目标与边界
 
 Stage 4 是当前路线图的最终阶段，在 Stage 3 当前公开文章索引上交付 OpenAI-compatible Chat、语义检索和带来源的 RAG 问答，并提供 React 用户界面。Stage 4 采用单轮、非流式问答；不持久化会话历史，避免在缺少会话生命周期和隐私契约时引入隐式状态。

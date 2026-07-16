@@ -21,6 +21,8 @@ import (
 	"github.com/lsy/blog/internal/platform/openaicompat"
 )
 
+const workerHeartbeatPath = "/tmp/worker-heartbeat"
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -35,6 +37,11 @@ func main() {
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if err := touchHeartbeat(); err != nil {
+		fmt.Fprintf(os.Stderr, "worker heartbeat setup failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	c, err := bootstrap.New(rootCtx, cfg)
 	if err != nil {
@@ -85,6 +92,7 @@ func main() {
 	if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 		c.Logger.Warn("initial stale job recovery failed", "error", err)
 	}
+	_ = touchHeartbeat()
 
 	for {
 		select {
@@ -95,7 +103,9 @@ func main() {
 			if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 				c.Logger.Warn("stale job recovery failed", "error", err)
 			}
+			_ = touchHeartbeat()
 		case <-poll.C:
+			_ = touchHeartbeat()
 			claimed, err := consumer.Claim(rootCtx)
 			if err != nil {
 				c.Logger.Warn("claim jobs failed", "error", err)
@@ -137,4 +147,8 @@ func main() {
 			}
 		}
 	}
+}
+
+func touchHeartbeat() error {
+	return os.WriteFile(workerHeartbeatPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644)
 }

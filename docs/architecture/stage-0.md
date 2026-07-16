@@ -1,5 +1,7 @@
 # Stage 0 架构说明
 
+> 本文记录 Stage 0 的基础设施边界。当前项目已完成 Stage 1–4；最新路线和生产化工作见 `stage-5.md`。
+
 ## 1. 目标与交付边界
 
 Stage 0 只交付可构建、可迁移、可观测存活状态的后端基础设施：Go API/Worker/Migration 三个入口、MySQL、可降级 Redis、Nginx 入口和 Docker Compose 编排。
@@ -92,13 +94,13 @@ Compose 自带的 Redis 使用 `requirepass`，所以当前部署要求 `REDIS_P
 ```
 
 - `.env.example` 同时列出 Compose 初始化变量和当前 Go 配置的重要变量，但它只是模板。
-- `deploy/compose.yaml` 向容器透传 Stage 0 使用的配置；AI、Embedding 与 Milvus/RAG 变量仍是后续阶段模板。
+- `deploy/compose.yaml` 向容器透传当前 Stage 0–4 使用的配置；Stage 5 的 secret store/运行时 secret 注入仍待落地。
 - `MYSQL_PASSWORD`/`MYSQL_ROOT_PASSWORD` 用于初始化数据库服务；`MYSQL_DSN` 是应用使用的 `go-sql-driver/mysql` DSN，Compose 不会自动拼接，三者必须由部署者保持一致。
 - 显式提供但无法解析的整数、布尔、浮点或 duration 会在启动时失败；默认值只用于变量缺失或为空。
 - Nginx 固定 `client_max_body_size 2m`；提高应用 `HTTP_MAX_BODY_BYTES` 不会自动提高代理限制。
 - `REQUEST_ID_HEADER` 可在应用侧配置，但当前 Nginx 固定使用 `X-Request-ID`。
-- `APP_REQUEST_TIMEOUT` 当前只被读取，Stage 0 尚未安装请求总时长中间件，因此不产生运行时限制。
-- AI、Embedding、Milvus/RAG 配置是阶段 3/4 预留，不代表运行时能力已经存在。
+- `APP_REQUEST_TIMEOUT` 由 HTTP server 中间件强制执行；它会限制单个请求的总处理时长。
+- AI、Embedding、Milvus/RAG 配置已经由 Stage 3/4 使用；是否可用取决于对应开关和外部依赖，不应仅依据配置字段判断。
 
 敏感值应来自本地 `.env` 或部署平台 Secret，不能写入镜像、文档、日志或源码。
 
@@ -144,10 +146,11 @@ backend/cmd/migrate
 
 ## 8. 阶段边界
 
-- **Stage 0（当前）**：配置、日志、request ID/CORS/请求体限制基础、MySQL/Redis 客户端、SQL migration、健康检查、容器编排。
-- **阶段 1（未实现）**：认证与博客领域 API、真正的限流和任务生产/消费。
-- **第 2 批（未交付）**：Frontend 源码与页面集成。
-- **阶段 3（未实现）**：OpenAI-compatible Embedding、Milvus 与文章索引能力。
-- **阶段 4（未实现）**：OpenAI-compatible Chat 与 RAG 检索问答。
+- **Stage 0（已交付）**：配置、日志、request ID/CORS/请求体限制基础、MySQL/Redis 客户端、SQL migration、健康检查、容器编排。
+- **Stage 1（已交付）**：认证与博客领域 API、Redis 限流和 MySQL 任务生产/消费。
+- **Stage 2（已交付）**：React SPA、同源 Nginx/Compose 交付和核心页面集成。
+- **Stage 3（已交付）**：OpenAI-compatible Embedding、Milvus 与文章索引能力。
+- **Stage 4（已交付）**：OpenAI-compatible Chat 与 RAG 检索问答。
+- **Stage 5（建议新增）**：生产化验收、安全加固、可观测性、备份恢复和 CI/CD；不新增业务功能，先把 Stage 0–4 变成可运营系统。
 
 数据库表、配置字段或空目录的存在只表示为后续阶段预留，不构成对应产品功能已经可用的承诺。

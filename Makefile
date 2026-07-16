@@ -7,15 +7,18 @@ BIN_DIR ?= $(ROOT_DIR)/bin
 ENV_FILE ?= $(ROOT_DIR)/.env
 COMPOSE_FILE := $(ROOT_DIR)/deploy/compose.yaml
 COMPOSE_DEV_FILE := $(ROOT_DIR)/deploy/compose.dev.yaml
+COMPOSE_INTEGRATION_FILE := $(ROOT_DIR)/deploy/compose.integration.yaml
+INTEGRATION_MYSQL_PORT ?= 33306
+INTEGRATION_MYSQL_DSN ?= blog_test:integration-only-password@tcp(127.0.0.1:$(INTEGRATION_MYSQL_PORT))/blog_integration?charset=utf8mb4&parseTime=true&loc=UTC
 GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
-.PHONY: help fmt fmt-check test vet build frontend-check check migrate-list compose-config compose-build up dev-up down logs ps
+.PHONY: help fmt fmt-check test test-race test-integration vet build frontend-check check verify verify-integration migrate-list compose-config compose-build up dev-up down logs ps
 
 help: ## 显示可用命令
 	@printf '%s\n' \
-	  'Stage 4 project commands (run from the project root)' \
+	  'Stage 5 project commands (run from the project root)' \
 	  '' \
 	  '  make help             Show this help' \
 	  '  make fmt              Format all Go source files' \
@@ -23,6 +26,8 @@ help: ## 显示可用命令
 	  '  make vet              Run go vet' \
 	  '  make build            Build api, worker, and migrate into ./bin' \
 	  '  make check            Check formatting, vet, tests, and builds' \
+	  '  make verify           Add race tests and Compose validation' \
+	  '  make verify-integration  Run ephemeral MySQL integration tests' \
 	  '  make migrate-list     List embedded SQL migration versions' \
 	  '  make compose-config   Validate Compose without printing secrets' \
 	  '  make compose-build    Build Compose application images' \
@@ -63,6 +68,22 @@ frontend-check: ## 检查 Frontend lint、test 和 production build
 	@cd "$(FRONTEND_DIR)" && npm run lint && npm run test && npm run build
 
 check: fmt-check vet test build frontend-check ## 执行 Stage 4 本地质量检查
+
+# The race detector is intentionally separate because it is slower than the
+# default local check and needs a larger memory budget in CI.
+test-race: ## 运行 Go race detector
+	@cd "$(BACKEND_DIR)" && "$(GO)" test -race ./...
+
+test-integration: ## 使用已运行的测试 MySQL 执行真实数据库集成测试
+	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/bootstrap
+
+verify: check test-race compose-config ## 执行发布前静态质量门禁
+
+verify-integration: ## 临时启动 MySQL，执行 migration 与 SKIP LOCKED 集成验收
+	@set -eu; \
+	trap 'INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT INT TERM; \
+	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d --wait; \
+	$(MAKE) test-integration INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)'
 
 migrate-list: ## 列出内嵌迁移；不连接数据库
 	@cd "$(BACKEND_DIR)" && "$(GO)" run ./cmd/migrate list

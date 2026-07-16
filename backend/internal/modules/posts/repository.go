@@ -5,12 +5,24 @@ import (
 	"errors"
 	"strings"
 
+	mysqlerr "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 
 	"github.com/lsy/blog/internal/domain"
 	aimod "github.com/lsy/blog/internal/modules/ai"
 	"github.com/lsy/blog/internal/platform/jobs"
 )
+
+// ErrPostSlugTaken means another post committed the same slug while the caller
+// was creating or renaming a post.
+var ErrPostSlugTaken = errors.New("posts: slug already taken")
+
+// IsPostSlugConflict recognizes only the posts.slug unique constraint. Other
+// duplicate keys (for example public_id) remain internal failures.
+func IsPostSlugConflict(err error) bool {
+	var mysqlErr *mysqlerr.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 && strings.Contains(mysqlErr.Message, "uk_posts_slug")
+}
 
 // Repository provides database access for posts, categories, and tags.
 type Repository struct {
@@ -43,6 +55,9 @@ func WithIndexJobs(maxAttempts int) RepositoryOption {
 func (r *Repository) CreatePost(ctx context.Context, post *domain.Post, categoryIDs, tagIDs []uint64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(post).Error; err != nil {
+			if IsPostSlugConflict(err) {
+				return ErrPostSlugTaken
+			}
 			return err
 		}
 		for _, cid := range categoryIDs {
@@ -66,6 +81,9 @@ func (r *Repository) CreatePost(ctx context.Context, post *domain.Post, category
 func (r *Repository) UpdatePost(ctx context.Context, post *domain.Post, categoryIDs, tagIDs *[]uint64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(post).Error; err != nil {
+			if IsPostSlugConflict(err) {
+				return ErrPostSlugTaken
+			}
 			return err
 		}
 		if categoryIDs != nil {
@@ -166,7 +184,7 @@ func (r *Repository) ListPosts(ctx context.Context, page, pageSize int, status, 
 		Preload("Author").
 		Preload("Categories").
 		Preload("Tags").
-		Order("published_at DESC").
+		Order("published_at DESC, id DESC").
 		Offset(offset).
 		Limit(pageSize).
 		Find(&posts).Error

@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,21 @@ func TestPasswordHashUsesArgon2id(t *testing.T) {
 	}
 	if err := VerifyPassword("wrong", hash); err == nil {
 		t.Fatal("VerifyPassword(wrong) succeeded")
+	}
+}
+
+func TestPasswordLengthIsBoundedBeforeArgon2(t *testing.T) {
+	cfg := testAuthConfig()
+	oversized := strings.Repeat("p", maxPasswordBytes+1)
+	if _, err := HashPassword(oversized, cfg); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("HashPassword(oversized) error = %v, want ErrInvalidCredentials", err)
+	}
+	hash, err := HashPassword("valid-password", cfg)
+	if err != nil {
+		t.Fatalf("HashPassword(valid) error: %v", err)
+	}
+	if err := VerifyPassword(oversized, hash); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("VerifyPassword(oversized) error = %v, want ErrInvalidCredentials", err)
 	}
 }
 

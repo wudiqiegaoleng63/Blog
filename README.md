@@ -59,7 +59,7 @@ Blog/
 │   ├── compose.dev.yaml
 │   └── proxy/nginx.conf
 ├── docs/
-│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4}.md
+│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5}.md
 │   └── adr/0001-modular-monolith.md
 ├── .env.example
 └── Makefile
@@ -153,7 +153,7 @@ The RAG endpoint embeds your question, retrieves relevant chunks from Milvus, ve
 - `/health/live` — process is responsive.
 - `/health/ready` — MySQL down → 503; Redis down → `degraded` but still 200 if MySQL is healthy.
 - Auth/comment rate limits fail **open** (soft dependency); AI rate limits fail **closed** (cost-sensitive).
-- The Worker doesn't listen on HTTP; Compose monitors it via `kill -0 1`.
+- The Worker doesn't listen on HTTP; Compose checks a heartbeat file to detect stalled polling instead of only checking whether PID 1 exists.
 
 ---
 
@@ -190,7 +190,8 @@ make vet              # go vet
 make build            # api, worker, migrate → ./bin
 make frontend-check   # lint + test + production build
 make check            # all of the above
-go -C backend test -race ./...
+make verify           # check + race detector + Compose validation
+make verify-integration # ephemeral MySQL: migration idempotency + dual-worker SKIP LOCKED
 ```
 
 Dev port overlay:
@@ -256,6 +257,7 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 | 2 | React SPA: reading, writing, session recovery, admin | ✅ |
 | 3 | OpenAI-compatible Embedding, Milvus, article indexing | ✅ |
 | 4 | Chat, semantic retrieval, grounded RAG Q&A | ✅ |
+| 5 | Production hardening, integration acceptance, observability, backup/recovery | 🚧 |
 
 ---
 
