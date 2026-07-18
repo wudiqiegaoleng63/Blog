@@ -66,4 +66,52 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - run: make test-integration-basic INTEGRATION_REDIS_PASSWORD=
+
+  milvus-ai-integration:
+    name: Milvus and AI integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4.6
+        env:
+          MYSQL_DATABASE: blog_integration
+          MYSQL_USER: blog_test
+          MYSQL_PASSWORD: integration-only-password
+          MYSQL_ROOT_PASSWORD: integration-only-root-password
+        ports:
+          - 33306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -ublog_test -pintegration-only-password"
+          --health-interval=2s
+          --health-timeout=3s
+          --health-retries=30
+      redis:
+        image: redis:7.4.5-alpine3.21
+        ports:
+          - 36379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=2s
+          --health-timeout=3s
+          --health-retries=20
+      milvus:
+        image: milvusdb/milvus:v2.5.9
+        ports:
+          - 39530:19530
+        env:
+          ETCD_USE_EMBED: "true"
+          COMMON_STORAGETYPE: local
+        options: >-
+          --health-cmd="curl -sf http://127.0.0.1:9091/healthz"
+          --health-interval=5s
+          --health-timeout=7s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
       - run: make test-integration INTEGRATION_REDIS_PASSWORD=

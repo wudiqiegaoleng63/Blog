@@ -259,6 +259,7 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 | 3 | OpenAI-compatible Embedding, Milvus, article indexing | ✅ |
 | 4 | Chat, semantic retrieval, grounded RAG Q&A | ✅ |
 | 5 | Production hardening, integration acceptance, observability, backup/recovery | 🚧 |
+| 5.1 | Real Milvus/AI integration, browser smoke, metrics, secrets, restore and release drills | 🚧 |
 
 ---
 

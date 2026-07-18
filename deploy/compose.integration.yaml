@@ -40,3 +40,22 @@ services:
       start_period: 3s
     security_opt:
       - no-new-privileges:true
+
+  milvus-integration:
+    image: milvusdb/milvus:v2.5.9
+    command: ["milvus", "run", "standalone"]
+    tmpfs:
+      - /var/lib/milvus
+    ports:
+      - "127.0.0.1:${INTEGRATION_MILVUS_PORT:-39530}:19530"
+    environment:
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9091/healthz"]
+      interval: 5s
+      timeout: 7s
+      retries: 30
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
