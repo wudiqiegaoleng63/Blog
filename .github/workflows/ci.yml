@@ -98,22 +98,28 @@ jobs:
           --health-interval=2s
           --health-timeout=3s
           --health-retries=20
-      milvus:
-        image: milvusdb/milvus:v2.5.9
-        ports:
-          - 39530:19530
-        env:
-          ETCD_USE_EMBED: "true"
-          COMMON_STORAGETYPE: local
-        options: >-
-          --health-cmd="curl -sf http://127.0.0.1:9091/healthz"
-          --health-interval=5s
-          --health-timeout=7s
-          --health-retries=30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - name: Start Milvus standalone
+        run: >-
+          docker run -d --name milvus-ci
+          -e ETCD_USE_EMBED=true
+          -e COMMON_STORAGETYPE=local
+          -p 127.0.0.1:39530:19530
+          milvusdb/milvus:v2.5.9
+          milvus run standalone
+      - name: Wait for Milvus
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker exec milvus-ci curl -sf http://127.0.0.1:9091/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs milvus-ci
+          exit 1
       - run: make test-integration INTEGRATION_REDIS_PASSWORD=
