@@ -191,7 +191,7 @@ make build            # api, worker, migrate → ./bin
 make frontend-check   # lint + test + production build
 make check            # all of the above
 make verify           # check + race detector + Compose validation
-make verify-integration # ephemeral MySQL: migration idempotency + dual-worker SKIP LOCKED
+make verify-integration # ephemeral MySQL/Redis: migrations, auth, limits, dual-worker SKIP LOCKED
 ```
 
 Dev port overlay:

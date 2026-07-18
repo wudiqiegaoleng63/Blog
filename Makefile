@@ -10,6 +10,9 @@ COMPOSE_DEV_FILE := $(ROOT_DIR)/deploy/compose.dev.yaml
 COMPOSE_INTEGRATION_FILE := $(ROOT_DIR)/deploy/compose.integration.yaml
 INTEGRATION_MYSQL_PORT ?= 33306
 INTEGRATION_MYSQL_DSN ?= blog_test:integration-only-password@tcp(127.0.0.1:$(INTEGRATION_MYSQL_PORT))/blog_integration?charset=utf8mb4&parseTime=true&loc=UTC
+INTEGRATION_REDIS_PORT ?= 36379
+INTEGRATION_REDIS_ADDR ?= 127.0.0.1:$(INTEGRATION_REDIS_PORT)
+INTEGRATION_REDIS_PASSWORD ?= integration-only-redis-password
 GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
@@ -74,16 +77,16 @@ check: fmt-check vet test build frontend-check ## 执行 Stage 4 本地质量检
 test-race: ## 运行 Go race detector
 	@cd "$(BACKEND_DIR)" && "$(GO)" test -race ./...
 
-test-integration: ## 使用已运行的测试 MySQL 执行真实数据库集成测试
-	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/bootstrap
+test-integration: ## 使用已运行的测试 MySQL/Redis 执行真实依赖集成测试
+	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' TEST_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)' TEST_REDIS_PASSWORD='$(INTEGRATION_REDIS_PASSWORD)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/platform/ratelimit ./internal/bootstrap
 
 verify: check test-race compose-config ## 执行发布前静态质量门禁
 
-verify-integration: ## 临时启动 MySQL，执行 migration 与 SKIP LOCKED 集成验收
+verify-integration: ## 临时启动 MySQL/Redis，执行 migration、认证、限流与任务验收
 	@set -eu; \
-	trap 'INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT INT TERM; \
-	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d --wait; \
-	$(MAKE) test-integration INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)'
+	trap 'INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT INT TERM; \
+	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d --wait; \
+	$(MAKE) test-integration INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)'
 
 migrate-list: ## 列出内嵌迁移；不连接数据库
 	@cd "$(BACKEND_DIR)" && "$(GO)" run ./cmd/migrate list

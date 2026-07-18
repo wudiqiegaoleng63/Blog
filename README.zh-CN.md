@@ -191,7 +191,7 @@ make build            # api, worker, migrate → ./bin
 make frontend-check   # lint + test + production build
 make check            # 以上全部
 make verify           # check + race detector + Compose 校验
-make verify-integration # 临时 MySQL：migration 幂等 + 双 Worker SKIP LOCKED
+make verify-integration # 临时 MySQL/Redis：migration、认证、限流、双 Worker SKIP LOCKED
 ```
 
 开发端口覆盖：
