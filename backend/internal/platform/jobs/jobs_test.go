@@ -4,9 +4,23 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/lsy/blog/internal/domain"
 )
+
+func TestQueueStatsOldestPendingAge(t *testing.T) {
+	now := time.Date(2026, time.July, 18, 12, 0, 0, 0, time.UTC)
+	stats := QueueStats{}
+	if age := stats.OldestPendingAge(now); age != 0 {
+		t.Fatalf("empty queue age = %s, want zero", age)
+	}
+	oldest := now.Add(-3 * time.Minute)
+	stats.OldestPendingAt = &oldest
+	if age := stats.OldestPendingAge(now); age != 3*time.Minute {
+		t.Fatalf("oldest age = %s, want 3m", age)
+	}
+}
 
 func TestRegistryHandle(t *testing.T) {
 	registry := NewRegistry()

@@ -18,7 +18,13 @@ import (
 	aimod "github.com/lsy/blog/internal/modules/ai"
 	"github.com/lsy/blog/internal/modules/comments"
 	"github.com/lsy/blog/internal/platform/jobs"
+	"github.com/lsy/blog/internal/platform/observability"
 	"github.com/lsy/blog/internal/platform/openaicompat"
+)
+
+const (
+	workerHeartbeatPath = "/tmp/worker-heartbeat"
+	workerStatsInterval = 30 * time.Second
 )
 
 func main() {
@@ -35,6 +41,11 @@ func main() {
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if err := touchHeartbeat(); err != nil {
+		fmt.Fprintf(os.Stderr, "worker heartbeat setup failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	c, err := bootstrap.New(rootCtx, cfg)
 	if err != nil {
@@ -81,10 +92,13 @@ func main() {
 	}
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
+	statsTicker := time.NewTicker(workerStatsInterval)
+	defer statsTicker.Stop()
 
 	if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 		c.Logger.Warn("initial stale job recovery failed", "error", err)
 	}
+	_ = touchHeartbeat()
 
 	for {
 		select {
@@ -95,7 +109,13 @@ func main() {
 			if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 				c.Logger.Warn("stale job recovery failed", "error", err)
 			}
+			logQueueStats(rootCtx, c.Logger, consumer)
+			_ = touchHeartbeat()
+		case <-statsTicker.C:
+			logQueueStats(rootCtx, c.Logger, consumer)
+			_ = touchHeartbeat()
 		case <-poll.C:
+			_ = touchHeartbeat()
 			claimed, err := consumer.Claim(rootCtx)
 			if err != nil {
 				c.Logger.Warn("claim jobs failed", "error", err)
@@ -137,4 +157,23 @@ func main() {
 			}
 		}
 	}
+}
+
+func logQueueStats(ctx context.Context, logger *observability.Logger, consumer *jobs.Consumer) {
+	stats, err := consumer.QueueStats(ctx)
+	if err != nil {
+		logger.Warn("queue stats failed", "error", err)
+		return
+	}
+	logger.Info("queue stats",
+		"pending", stats.Pending,
+		"running", stats.Running,
+		"dead", stats.Dead,
+		"completed", stats.Completed,
+		"oldest_pending_age_seconds", stats.OldestPendingAge(time.Now().UTC()).Seconds(),
+	)
+}
+
+func touchHeartbeat() error {
+	return os.WriteFile(workerHeartbeatPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644)
 }

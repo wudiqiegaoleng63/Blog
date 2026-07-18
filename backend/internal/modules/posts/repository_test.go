@@ -1,6 +1,23 @@
 package posts
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	mysqlerr "github.com/go-sql-driver/mysql"
+)
+
+func TestIsPostSlugConflict(t *testing.T) {
+	if !IsPostSlugConflict(&mysqlerr.MySQLError{Number: 1062, Message: "Duplicate entry 'same' for key 'uk_posts_slug'"}) {
+		t.Fatal("expected posts slug duplicate to be recognized")
+	}
+	if IsPostSlugConflict(&mysqlerr.MySQLError{Number: 1062, Message: "Duplicate entry 'id' for key 'uk_posts_public_id'"}) {
+		t.Fatal("did not expect public ID duplicate to be treated as a slug conflict")
+	}
+	if IsPostSlugConflict(errors.New("duplicate")) {
+		t.Fatal("did not expect an arbitrary error to be treated as a slug conflict")
+	}
+}
 
 func TestGenerateSlug(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{

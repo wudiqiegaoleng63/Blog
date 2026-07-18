@@ -1,5 +1,7 @@
 # Stage 3 架构说明
 
+> Stage 3 已完成。本文记录索引契约；真实 Milvus/Worker 集成验收和运营指标属于 `stage-5.md`。
+
 ## 1. 目标与边界
 
 Stage 3 在 Stage 2 全栈博客上交付可独立启用的文章语义索引：OpenAI-compatible Embedding、Milvus 向量存储、可靠的文章索引任务和已有文章回填。Stage 3 不要求 Chat；关闭索引后 Stage 0–2 行为保持不变。

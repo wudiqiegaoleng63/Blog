@@ -6,6 +6,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,6 +91,49 @@ type Consumer struct {
 	batchSize    int
 }
 
+// QueueStats is a point-in-time view used by the worker's operational logs.
+// The database remains the source of truth; these values are not process-local
+// counters and therefore remain useful when multiple workers are running.
+type QueueStats struct {
+	Pending         int64
+	Running         int64
+	Dead            int64
+	Completed       int64
+	OldestPendingAt *time.Time
+}
+
+// OldestPendingAge returns the age of the oldest pending job at now. A queue
+// without pending work reports zero.
+func (s QueueStats) OldestPendingAge(now time.Time) time.Duration {
+	if s.OldestPendingAt == nil || s.OldestPendingAt.After(now) {
+		return 0
+	}
+	return now.Sub(*s.OldestPendingAt)
+}
+
+func (c *Consumer) QueueStats(ctx context.Context) (QueueStats, error) {
+	var row struct {
+		Pending         int64      `gorm:"column:pending"`
+		Running         int64      `gorm:"column:running"`
+		Dead            int64      `gorm:"column:dead"`
+		Completed       int64      `gorm:"column:completed"`
+		OldestPendingAt *time.Time `gorm:"column:oldest_pending_at"`
+	}
+	if err := c.db.WithContext(ctx).Model(&domain.Job{}).Select(`
+		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+		COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+		COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0) AS dead,
+		COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+		MIN(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at
+	`).Scan(&row).Error; err != nil {
+		return QueueStats{}, fmt.Errorf("jobs: queue stats: %w", err)
+	}
+	return QueueStats{
+		Pending: row.Pending, Running: row.Running, Dead: row.Dead,
+		Completed: row.Completed, OldestPendingAt: row.OldestPendingAt,
+	}, nil
+}
+
 func NewConsumer(db *gorm.DB, cfg config.JobsConfig) *Consumer {
 	return &Consumer{
 		db:           db,
@@ -111,16 +155,20 @@ func (c *Consumer) Claim(ctx context.Context) ([]domain.Job, error) {
 			SELECT id, public_id, job_type, dedup_key, payload_json, status, priority,
 			       attempts, max_attempts, run_after, locked_by, locked_at,
 			       last_error, created_at, updated_at, finished_at
-			FROM background_jobs
+			FROM background_jobs FORCE INDEX (PRIMARY)
 			WHERE status = 'pending' AND run_after <= ?
-			ORDER BY priority DESC, created_at ASC, id ASC
+			ORDER BY id ASC
 			LIMIT ? FOR UPDATE SKIP LOCKED
 		`, now, c.batchSize).Scan(&candidates).Error; err != nil {
 			return err
 		}
-		for i := range candidates {
+		if len(candidates) > 0 {
+			ids := make([]uint64, len(candidates))
+			for i := range candidates {
+				ids[i] = candidates[i].ID
+			}
 			result := tx.Model(&domain.Job{}).
-				Where("id = ? AND status = 'pending'", candidates[i].ID).
+				Where("id IN ? AND status = 'pending'", ids).
 				Updates(map[string]interface{}{
 					"status": "running", "locked_by": c.lockedBy, "locked_at": now,
 					"attempts": gorm.Expr("attempts + 1"), "updated_at": now,
@@ -128,16 +176,18 @@ func (c *Consumer) Claim(ctx context.Context) ([]domain.Job, error) {
 			if result.Error != nil {
 				return result.Error
 			}
-			if result.RowsAffected != 1 {
-				return fmt.Errorf("jobs: claim lost job %d", candidates[i].ID)
+			if result.RowsAffected != int64(len(candidates)) {
+				return fmt.Errorf("jobs: claim updated %d of %d selected jobs", result.RowsAffected, len(candidates))
 			}
-			candidates[i].Status, candidates[i].LockedBy, candidates[i].LockedAt = "running", &c.lockedBy, &now
-			candidates[i].Attempts++
-			candidates[i].UpdatedAt = now
+			for i := range candidates {
+				candidates[i].Status, candidates[i].LockedBy, candidates[i].LockedAt = "running", &c.lockedBy, &now
+				candidates[i].Attempts++
+				candidates[i].UpdatedAt = now
+			}
 		}
 		claimed = candidates
 		return nil
-	})
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("jobs: claim: %w", err)
 	}

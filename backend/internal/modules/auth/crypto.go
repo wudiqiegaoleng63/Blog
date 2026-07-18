@@ -29,12 +29,16 @@ var (
 const (
 	argonSaltLength = 16
 	argonKeyLength  = 32
+	// maxPasswordBytes bounds Argon2 work for both registration and login.
+	// Password managers can still use passphrases while oversized request fields
+	// cannot turn password verification into an allocation attack.
+	maxPasswordBytes = 1024
 )
 
 // HashPassword derives an Argon2id password hash and encodes its parameters in
 // PHC form so future parameter upgrades remain verifiable.
 func HashPassword(password string, cfg config.AuthConfig) (string, error) {
-	if password == "" {
+	if password == "" || len(password) > maxPasswordBytes {
 		return "", ErrInvalidCredentials
 	}
 	salt := make([]byte, argonSaltLength)
@@ -55,6 +59,9 @@ func HashPassword(password string, cfg config.AuthConfig) (string, error) {
 // VerifyPassword verifies a PHC Argon2id hash while bounding parsed parameters
 // before allocating memory.
 func VerifyPassword(password, encoded string) error {
+	if len(password) > maxPasswordBytes {
+		return ErrInvalidCredentials
+	}
 	if !strings.HasPrefix(encoded, "$argon2id$") {
 		return verifyLegacyPassword(password, encoded)
 	}

@@ -60,6 +60,7 @@ x-app-environment: &app-environment
   JOBS_MAX_ATTEMPTS: ${JOBS_MAX_ATTEMPTS:-5}
   JOBS_LOCK_SECONDS: ${JOBS_LOCK_SECONDS:-60}
   JOBS_BATCH_SIZE: ${JOBS_BATCH_SIZE:-10}
+  WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-90}
   AI_ENABLED: ${AI_ENABLED:-false}
   AI_INDEXING_ENABLED: ${AI_INDEXING_ENABLED:-false}
   AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
@@ -180,7 +181,7 @@ services:
         condition: service_healthy
         required: false
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
+      test: ["CMD-SHELL", "test -f /tmp/worker-heartbeat && test $$(( $$(date +%s) - $$(stat -c %Y /tmp/worker-heartbeat) )) -lt $${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-90}"]
       interval: 30s
       timeout: 3s
       retries: 3

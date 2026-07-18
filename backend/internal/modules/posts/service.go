@@ -98,6 +98,9 @@ func (s *Service) Create(ctx *gin.Context, input CreatePostInput) (*domain.Post,
 		post.PublishedAt = &now
 	}
 	if err := s.repo.CreatePost(ctx.Request.Context(), post, categoryIDs, tagIDs); err != nil {
+		if errors.Is(err, ErrPostSlugTaken) {
+			return nil, apperr.Conflict("post slug is already in use; please retry")
+		}
 		return nil, apperr.Internal(err, "")
 	}
 	created, err := s.repo.FindPostBySlug(ctx.Request.Context(), post.Slug)
@@ -215,6 +218,9 @@ func (s *Service) Update(ctx *gin.Context, slug string, input UpdatePostInput) (
 	post.ContentVersion++
 	post.UpdatedAt = time.Now().UTC()
 	if err := s.repo.UpdatePost(ctx.Request.Context(), post, categoryIDs, tagIDs); err != nil {
+		if errors.Is(err, ErrPostSlugTaken) {
+			return nil, apperr.Conflict("post slug is already in use; please retry")
+		}
 		return nil, apperr.Internal(err, "")
 	}
 	updated, err := s.repo.FindPostBySlug(ctx.Request.Context(), post.Slug)

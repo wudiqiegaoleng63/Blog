@@ -1,0 +1,42 @@
+name: blog-integration
+
+services:
+  mysql-integration:
+    image: mysql:8.4.6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_DATABASE: blog_integration
+      MYSQL_USER: blog_test
+      MYSQL_PASSWORD: integration-only-password
+      MYSQL_ROOT_PASSWORD: integration-only-root-password
+    tmpfs:
+      - /var/lib/mysql
+    ports:
+      - "127.0.0.1:${INTEGRATION_MYSQL_PORT:-33306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -ublog_test -pintegration-only-password blog_integration -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  redis-integration:
+    image: redis:7.4.5-alpine3.21
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "integration-only-redis-password"]
+    tmpfs:
+      - /data
+    ports:
+      - "127.0.0.1:${INTEGRATION_REDIS_PORT:-36379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=integration-only-redis-password redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    security_opt:
+      - no-new-privileges:true

@@ -43,8 +43,8 @@ func (s *Service) Register(ctx *gin.Context, input RegisterInput) (*domain.Token
 	if len(username) < 3 || len(username) > 32 {
 		return nil, apperr.Validation("username must be 3-32 characters", gin.H{"field": "username"})
 	}
-	if len(input.Password) < 8 {
-		return nil, apperr.Validation("password must be at least 8 characters", gin.H{"field": "password"})
+	if len(input.Password) < 8 || len(input.Password) > maxPasswordBytes {
+		return nil, apperr.Validation("password must be 8-1024 bytes", gin.H{"field": "password"})
 	}
 
 	existing, err := s.repo.FindUserByEmail(ctx.Request.Context(), email)
