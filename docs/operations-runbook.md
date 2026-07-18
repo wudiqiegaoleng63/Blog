@@ -9,13 +9,14 @@
 3. 执行：
 
    ```bash
+   make privacy-check
    make verify
    make verify-integration
    docker compose --env-file .env -f deploy/compose.yaml config --quiet
    ```
 
 4. 确认数据库有可用备份，最近一次恢复演练未超过约定周期。
-5. 确认 `AUTH_COOKIE_SECURE=true`、CORS 白名单、trusted proxies 和所有生产密钥已从模板值替换。
+5. 确认 `AUTH_COOKIE_SECURE=true`、CORS 白名单、trusted proxies 和所有生产密钥已从模板值替换；本地 `.env` 权限必须为 `0600`，生产 Secret 目录建议 `0700`、文件 `0600`。
 6. 发布前记录当前镜像 tag、migration version、队列 `pending/running/dead` 和最老任务年龄。
 
 ## 2. 正常发布
@@ -81,7 +82,7 @@ docker compose --env-file .env -f deploy/compose.yaml up -d api worker frontend 
 
 ### 逻辑备份
 
-仓库提供 `scripts/backup-mysql.sh` 和 Make 入口。密码只从受控文件读取，不进入命令行参数：
+仓库提供 `scripts/operations/backup-mysql.sh` 和 Make 入口。密码只从受控文件读取，不进入命令行参数：
 
 ```bash
 BACKUP_DIR=/secure/backups \

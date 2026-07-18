@@ -55,14 +55,19 @@ Blog/
 │   ├── migrations/          # embedded SQL (0001 core, 0002 ai indexing)
 │   └── Dockerfile
 ├── deploy/
-│   ├── compose.yaml
-│   ├── compose.dev.yaml
+│   ├── compose.yaml              # Base deployment
+│   ├── compose.dev.yaml          # Loopback development ports
+│   ├── compose.integration.yaml  # Ephemeral MySQL/Redis/Milvus
+│   ├── compose.secrets.yaml      # Production secret-file overlay
 │   └── proxy/nginx.conf
 ├── docs/
-│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5}.md
+│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5,stage-5-1}.md
 │   ├── operations-runbook.md
 │   └── adr/0001-modular-monolith.md
-├── .env.example
+├── scripts/
+│   ├── operations/               # Backup and recovery automation
+│   └── security/                 # Repository privacy checks
+├── .env.example                  # Harmless placeholders only
 └── Makefile
 ```
 
@@ -187,6 +192,7 @@ Production and staging must never run `down`; investigate dirty state before tou
 ```bash
 make help
 make fmt              # gofmt
+make privacy-check    # tracked/untracked secrets, private artifacts, local .env mode
 make test             # go test ./...
 make vet              # go vet
 make build            # api, worker, migrate → ./bin

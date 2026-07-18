@@ -1,9 +1,79 @@
-# Local environment and secrets
+# -----------------------------------------------------------------------------
+# Local environment and secret material
+# -----------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
+# Mounted secret directories and local credential stores
+secrets/
+.secrets/
+**/secrets/
+**/.secrets/
+credentials/
+.credentials/
+**/credentials/
+**/.credentials/
+*.secret
+*.secrets
+*.credential
+*.credentials
+
+# Private keys, certificates, signing stores, and cloud credentials
+*.pem
+*.key
+*.private
+*.crt
+*.cer
+*.der
+*.p7b
+*.p7c
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdb
+*.ovpn
+*.mobileprovision
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Database data, exports, backups, and restore artifacts
+/backups/
+/dumps/
+/data/
+**/backups/
+**/dumps/
+*.sql.gz
+*.sql.zst
+*.dump
+*.backup
+*.bak
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.rdb
+*.aof
+*.snapshot
+*.snap
+
+# -----------------------------------------------------------------------------
 # Build and test output
+# -----------------------------------------------------------------------------
 /bin/
 /dist/
 /build/
@@ -14,9 +84,31 @@ coverage*.txt
 coverage*.html
 frontend/test-results/
 frontend/playwright-report/
+frontend/blob-report/
 
-# Claude Code transient worktrees
+# Dependencies and tool caches
+node_modules/
+**/node_modules/
+.cache/
+.npm/
+.pnpm-store/
+.yarn/
+.gocache/
+.gomodcache/
+
+# Logs and process/runtime files
+*.log
+logs/
+*.pid
+*.pid.lock
+*.sock
+*.socket
+*.retry
+
+# Claude Code transient worktrees and local session state
 .claude/worktrees/
+.claude/settings.local.json
+.claude/*.local.*
 
 # Editors and IDEs
 .idea/
@@ -30,5 +122,4 @@ frontend/playwright-report/
 Thumbs.db
 *.tmp
 *.temp
-.cache/
 /tmp/

@@ -55,14 +55,19 @@ Blog/
 │   ├── migrations/          # 内嵌 SQL（0001 核心表, 0002 AI 索引）
 │   └── Dockerfile
 ├── deploy/
-│   ├── compose.yaml
-│   ├── compose.dev.yaml
+│   ├── compose.yaml              # 基础部署
+│   ├── compose.dev.yaml          # 回环开发端口
+│   ├── compose.integration.yaml  # 临时 MySQL/Redis/Milvus
+│   ├── compose.secrets.yaml      # 生产 Secret 文件覆盖
 │   └── proxy/nginx.conf
 ├── docs/
-│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5}.md
+│   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5,stage-5-1}.md
 │   ├── operations-runbook.md
 │   └── adr/0001-modular-monolith.md
-├── .env.example
+├── scripts/
+│   ├── operations/               # 备份恢复自动化
+│   └── security/                 # 仓库隐私检查
+├── .env.example                  # 只能保存无害占位值
 └── Makefile
 ```
 
@@ -187,6 +192,7 @@ docker compose --env-file .env -f deploy/compose.yaml run --rm -e APP_ENV=dev mi
 ```bash
 make help
 make fmt              # gofmt
+make privacy-check    # 已跟踪/未跟踪 Secret、隐私文件与本地 .env 权限
 make test             # go test ./...
 make vet              # go vet
 make build            # api, worker, migrate → ./bin
