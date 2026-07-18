@@ -60,6 +60,7 @@ Blog/
 │   └── proxy/nginx.conf
 ├── docs/
 │   ├── architecture/{stage-0,stage-1,stage-2,stage-3,stage-4,stage-5}.md
+│   ├── operations-runbook.md
 │   └── adr/0001-modular-monolith.md
 ├── .env.example
 └── Makefile
@@ -153,7 +154,7 @@ The RAG endpoint embeds your question, retrieves relevant chunks from Milvus, ve
 - `/health/live` — process is responsive.
 - `/health/ready` — MySQL down → 503; Redis down → `degraded` but still 200 if MySQL is healthy.
 - Auth/comment rate limits fail **open** (soft dependency); AI rate limits fail **closed** (cost-sensitive).
-- The Worker doesn't listen on HTTP; Compose checks a heartbeat file to detect stalled polling instead of only checking whether PID 1 exists.
+- The Worker doesn't listen on HTTP; Compose checks a heartbeat file to detect stalled polling instead of only checking whether PID 1 exists. It also logs pending/running/dead/completed counts and oldest pending age periodically.
 
 ---
 

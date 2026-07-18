@@ -13,7 +13,7 @@ Stage 5 交付：
 - 可重复的 CI 质量门禁和 Compose smoke/integration tests；
 - 认证、限流、请求体和外部 AI 调用的安全边界；
 - Worker 心跳、队列积压、失败/死信和 AI 索引状态指标；
-- MySQL/Redis/Milvus 备份、恢复和升级操作手册；
+- MySQL/Redis/Milvus 备份、恢复和升级操作手册（见 `docs/operations-runbook.md`）；
 - 生产 secrets 不通过普通 Compose environment 长期暴露的部署方案；
 - 发布、回滚和故障处置 runbook；
 - 明确的 SLO、告警阈值和容量基线。

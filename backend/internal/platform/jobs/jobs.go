@@ -91,6 +91,49 @@ type Consumer struct {
 	batchSize    int
 }
 
+// QueueStats is a point-in-time view used by the worker's operational logs.
+// The database remains the source of truth; these values are not process-local
+// counters and therefore remain useful when multiple workers are running.
+type QueueStats struct {
+	Pending         int64
+	Running         int64
+	Dead            int64
+	Completed       int64
+	OldestPendingAt *time.Time
+}
+
+// OldestPendingAge returns the age of the oldest pending job at now. A queue
+// without pending work reports zero.
+func (s QueueStats) OldestPendingAge(now time.Time) time.Duration {
+	if s.OldestPendingAt == nil || s.OldestPendingAt.After(now) {
+		return 0
+	}
+	return now.Sub(*s.OldestPendingAt)
+}
+
+func (c *Consumer) QueueStats(ctx context.Context) (QueueStats, error) {
+	var row struct {
+		Pending         int64      `gorm:"column:pending"`
+		Running         int64      `gorm:"column:running"`
+		Dead            int64      `gorm:"column:dead"`
+		Completed       int64      `gorm:"column:completed"`
+		OldestPendingAt *time.Time `gorm:"column:oldest_pending_at"`
+	}
+	if err := c.db.WithContext(ctx).Model(&domain.Job{}).Select(`
+		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+		COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+		COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0) AS dead,
+		COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+		MIN(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at
+	`).Scan(&row).Error; err != nil {
+		return QueueStats{}, fmt.Errorf("jobs: queue stats: %w", err)
+	}
+	return QueueStats{
+		Pending: row.Pending, Running: row.Running, Dead: row.Dead,
+		Completed: row.Completed, OldestPendingAt: row.OldestPendingAt,
+	}, nil
+}
+
 func NewConsumer(db *gorm.DB, cfg config.JobsConfig) *Consumer {
 	return &Consumer{
 		db:           db,

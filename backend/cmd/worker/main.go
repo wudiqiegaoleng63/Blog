@@ -18,10 +18,14 @@ import (
 	aimod "github.com/lsy/blog/internal/modules/ai"
 	"github.com/lsy/blog/internal/modules/comments"
 	"github.com/lsy/blog/internal/platform/jobs"
+	"github.com/lsy/blog/internal/platform/observability"
 	"github.com/lsy/blog/internal/platform/openaicompat"
 )
 
-const workerHeartbeatPath = "/tmp/worker-heartbeat"
+const (
+	workerHeartbeatPath = "/tmp/worker-heartbeat"
+	workerStatsInterval = 30 * time.Second
+)
 
 func main() {
 	cfg, err := config.Load()
@@ -88,6 +92,8 @@ func main() {
 	}
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
+	statsTicker := time.NewTicker(workerStatsInterval)
+	defer statsTicker.Stop()
 
 	if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 		c.Logger.Warn("initial stale job recovery failed", "error", err)
@@ -103,6 +109,10 @@ func main() {
 			if err := consumer.ReapStaleJobs(rootCtx); err != nil {
 				c.Logger.Warn("stale job recovery failed", "error", err)
 			}
+			logQueueStats(rootCtx, c.Logger, consumer)
+			_ = touchHeartbeat()
+		case <-statsTicker.C:
+			logQueueStats(rootCtx, c.Logger, consumer)
 			_ = touchHeartbeat()
 		case <-poll.C:
 			_ = touchHeartbeat()
@@ -147,6 +157,21 @@ func main() {
 			}
 		}
 	}
+}
+
+func logQueueStats(ctx context.Context, logger *observability.Logger, consumer *jobs.Consumer) {
+	stats, err := consumer.QueueStats(ctx)
+	if err != nil {
+		logger.Warn("queue stats failed", "error", err)
+		return
+	}
+	logger.Info("queue stats",
+		"pending", stats.Pending,
+		"running", stats.Running,
+		"dead", stats.Dead,
+		"completed", stats.Completed,
+		"oldest_pending_age_seconds", stats.OldestPendingAge(time.Now().UTC()).Seconds(),
+	)
 }
 
 func touchHeartbeat() error {

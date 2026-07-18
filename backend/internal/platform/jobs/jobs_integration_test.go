@@ -111,4 +111,11 @@ func TestMySQLConcurrentClaimAndLifecycle(t *testing.T) {
 	if completed != jobCount {
 		t.Fatalf("completed jobs = %d, want %d", completed, jobCount)
 	}
+	stats, err := first.QueueStats(ctx)
+	if err != nil {
+		t.Fatalf("QueueStats(): %v", err)
+	}
+	if stats.Completed != jobCount || stats.Pending != 0 || stats.Running != 0 || stats.Dead != 0 {
+		t.Fatalf("QueueStats() = %+v, want completed=%d and no unfinished jobs", stats, jobCount)
+	}
 }
