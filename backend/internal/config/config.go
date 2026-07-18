@@ -192,11 +192,17 @@ type ObservabilityConfig struct {
 	LogFormat string // json | text
 	// RequestIDHeader 是请求 ID 读写使用的 Header 名称。
 	RequestIDHeader string
+	// MetricsAddr is the internal-only worker scrape listener. API metrics remain
+	// on /metrics through the main HTTP server.
+	MetricsAddr string
 }
 
 // Load 从环境变量加载配置并应用非敏感默认值。
 // 生产环境必须通过 Validate 在启动时校验关键约束。
 func Load() (*Config, error) {
+	if err := validateSecretFiles(); err != nil {
+		return nil, err
+	}
 	if err := validateTypedEnvironment(); err != nil {
 		return nil, err
 	}
@@ -329,6 +335,7 @@ func Load() (*Config, error) {
 			LogLevel:        strings.ToLower(getenv("LOG_LEVEL", "info")),
 			LogFormat:       getenv("LOG_FORMAT", "json"),
 			RequestIDHeader: getenv("REQUEST_ID_HEADER", "X-Request-ID"),
+			MetricsAddr:     getenv("METRICS_ADDR", ":9090"),
 		},
 	}
 
@@ -336,6 +343,25 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+func validateSecretFiles() error {
+	var errs []error
+	for _, key := range []string{"MYSQL_DSN", "REDIS_PASSWORD", "JWT_SECRET", "AI_CHAT_API_KEY", "AI_EMBEDDING_API_KEY", "MILVUS_PASSWORD"} {
+		path, ok := os.LookupEnv(key + "_FILE")
+		if !ok || strings.TrimSpace(path) == "" {
+			continue
+		}
+		value, err := os.ReadFile(strings.TrimSpace(path))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read %s_FILE: %w", key, err))
+			continue
+		}
+		if strings.TrimSpace(string(value)) == "" {
+			errs = append(errs, fmt.Errorf("%s_FILE is empty", key))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateTypedEnvironment rejects malformed values that were explicitly supplied.
@@ -396,7 +422,7 @@ func validateTypedEnvironment() error {
 
 // LoadMySQLDSN loads only the migration CLI's required database setting.
 func LoadMySQLDSN() (string, error) {
-	dsn := os.Getenv("MYSQL_DSN")
+	dsn := getenv("MYSQL_DSN", "")
 	if dsn == "" {
 		return "", errors.New("MYSQL_DSN is required")
 	}
@@ -475,6 +501,10 @@ func (c *Config) Validate() error {
 		if err := c.validateRAG(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	if c.Observability.MetricsAddr == "" {
+		errs = append(errs, errors.New("METRICS_ADDR is required"))
 	}
 
 	requestIDHeader := c.Observability.RequestIDHeader
@@ -567,6 +597,12 @@ func (c *Config) IsProduction() bool { return c.App.Env == "production" }
 func getenv(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
+	}
+	if path, ok := os.LookupEnv(key + "_FILE"); ok && strings.TrimSpace(path) != "" {
+		value, err := os.ReadFile(strings.TrimSpace(path))
+		if err == nil && strings.TrimSpace(string(value)) != "" {
+			return strings.TrimSpace(string(value))
+		}
 	}
 	return def
 }

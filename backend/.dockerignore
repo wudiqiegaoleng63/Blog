@@ -12,5 +12,14 @@ coverage/
 *.log
 *.out
 *.test
+*.pem
+*.key
+*.p12
+*.pfx
+*.sql.gz
+*.dump
+*.backup
+secrets/
+.credentials/
 .tmp/
 tmp/

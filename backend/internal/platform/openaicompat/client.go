@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lsy/blog/internal/platform/observability"
 )
 
 const maxResponseBytes = 4 << 20
@@ -24,6 +26,7 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	maxRetries int
+	metrics    *observability.Metrics
 }
 
 func New(baseURL, apiKey string, timeout time.Duration, maxRetries int) (*Client, error) {
@@ -45,6 +48,15 @@ func New(baseURL, apiKey string, timeout time.Duration, maxRetries int) (*Client
 		baseURL: baseURL, apiKey: apiKey,
 		httpClient: &http.Client{Timeout: timeout}, maxRetries: maxRetries,
 	}, nil
+}
+
+func NewWithMetrics(baseURL, apiKey string, timeout time.Duration, maxRetries int, metrics *observability.Metrics) (*Client, error) {
+	client, err := New(baseURL, apiKey, timeout, maxRetries)
+	if err != nil {
+		return nil, err
+	}
+	client.metrics = metrics
+	return client, nil
 }
 
 type embeddingRequest struct {
@@ -158,8 +170,12 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseBod
 		}
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("Content-Type", "application/json")
+		start := time.Now()
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			if c.metrics != nil {
+				c.metrics.ObserveUpstream(providerForPath(path), operationForPath(path), 0, time.Since(start))
+			}
 			lastErr = err
 			if !retryableTransport(err) {
 				return err
@@ -168,6 +184,9 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseBod
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 		resp.Body.Close()
+		if c.metrics != nil {
+			c.metrics.ObserveUpstream(providerForPath(path), operationForPath(path), resp.StatusCode, time.Since(start))
+		}
 		if readErr != nil {
 			lastErr = readErr
 			continue
@@ -199,6 +218,18 @@ func (c *Client) post(ctx context.Context, path string, requestBody, responseBod
 		}
 	}
 	return lastErr
+}
+
+func providerForPath(path string) string { return "openai_compatible" }
+
+func operationForPath(path string) string {
+	if strings.Contains(path, "embeddings") {
+		return "embedding"
+	}
+	if strings.Contains(path, "chat") {
+		return "chat"
+	}
+	return "unknown"
 }
 
 func retryableTransport(err error) bool {

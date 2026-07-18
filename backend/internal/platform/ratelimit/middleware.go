@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/lsy/blog/internal/platform/cache"
+	"github.com/lsy/blog/internal/platform/observability"
 	"github.com/lsy/blog/internal/shared/apperr"
 )
 
@@ -27,22 +28,32 @@ type IdentityFunc func(*gin.Context) string
 // preserve the project's soft-dependency contract; callers should separately
 // protect public ingress with a gateway/WAF in production.
 func Middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc) gin.HandlerFunc {
-	return middleware(client, keys, scope, limitPerMinute, identity, false)
+	return middleware(client, keys, scope, limitPerMinute, identity, false, nil)
+}
+
+func MiddlewareWithMetrics(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc, metrics *observability.Metrics) gin.HandlerFunc {
+	return middleware(client, keys, scope, limitPerMinute, identity, false, metrics)
 }
 
 // StrictMiddleware fails closed when Redis cannot enforce a cost-sensitive limit.
 func StrictMiddleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc) gin.HandlerFunc {
-	return middleware(client, keys, scope, limitPerMinute, identity, true)
+	return middleware(client, keys, scope, limitPerMinute, identity, true, nil)
 }
 
-func middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc, failClosed bool) gin.HandlerFunc {
+func StrictMiddlewareWithMetrics(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc, metrics *observability.Metrics) gin.HandlerFunc {
+	return middleware(client, keys, scope, limitPerMinute, identity, true, metrics)
+}
+
+func middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limitPerMinute int, identity IdentityFunc, failClosed bool, metrics *observability.Metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if client == nil || limitPerMinute <= 0 {
 			if failClosed {
+				metrics.ObserveRateLimit(scope, "fail_closed")
 				c.Abort()
 				_ = c.Error(apperr.ServiceUnavailable("AI rate limiting is temporarily unavailable"))
 				return
 			}
+			metrics.ObserveRateLimit(scope, "fail_open")
 			c.Next()
 			return
 		}
@@ -52,14 +63,17 @@ func middleware(client redis.Scripter, keys cache.KeyBuilder, scope string, limi
 		result, err := incrementScript.Run(ctx, client, []string{key}, int64((2*time.Minute)/time.Millisecond)).Int64()
 		if err != nil {
 			if failClosed {
+				metrics.ObserveRateLimit(scope, "fail_closed")
 				c.Abort()
 				_ = c.Error(apperr.ServiceUnavailable("AI rate limiting is temporarily unavailable"))
 				return
 			}
+			metrics.ObserveRateLimit(scope, "fail_open")
 			c.Next()
 			return
 		}
 		if result > int64(limitPerMinute) {
+			metrics.ObserveRateLimit(scope, "rejected")
 			c.Header("Retry-After", "60")
 			c.Abort()
 			_ = c.Error(apperr.RateLimited(""))

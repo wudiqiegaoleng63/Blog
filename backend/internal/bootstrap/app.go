@@ -95,7 +95,7 @@ func (c *Container) registerModules() error {
 	router := c.engine.Router()
 
 	// 运维端点直接挂在根路径（/health/*）。
-	ops := operations.NewModule(c.Cfg, c.DB, c.Redis)
+	ops := operations.NewModuleWithMetrics(c.Cfg, c.DB, c.Redis, c.engine.Metrics().Handler())
 	ops.Register(router)
 
 	// --- Stage 1: 认证与博客领域 ---
@@ -104,9 +104,9 @@ func (c *Container) registerModules() error {
 	authMW := authmod.RequireAuth(c.Cfg.Auth, authRepo)
 	optionalAuthMW := authmod.OptionalAuth(c.Cfg.Auth, authRepo)
 	adminMW := authmod.RequireAdmin(c.Cfg.Auth, authRepo)
-	registerLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:register", c.Cfg.RateLimit.RegisterPerMinute, ratelimit.ByIP)
-	loginLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:login", c.Cfg.RateLimit.LoginPerMinute, ratelimit.ByIP)
-	refreshLimit := ratelimit.Middleware(c.Redis, c.Keys, "auth:refresh", c.Cfg.RateLimit.RefreshPerMinute, ratelimit.ByIP)
+	registerLimit := ratelimit.MiddlewareWithMetrics(c.Redis, c.Keys, "auth:register", c.Cfg.RateLimit.RegisterPerMinute, ratelimit.ByIP, c.engine.Metrics())
+	loginLimit := ratelimit.MiddlewareWithMetrics(c.Redis, c.Keys, "auth:login", c.Cfg.RateLimit.LoginPerMinute, ratelimit.ByIP, c.engine.Metrics())
+	refreshLimit := ratelimit.MiddlewareWithMetrics(c.Redis, c.Keys, "auth:refresh", c.Cfg.RateLimit.RefreshPerMinute, ratelimit.ByIP, c.engine.Metrics())
 
 	authModule := authmod.NewModule(c.Cfg, authRepo)
 	authModule.Register(router, authMW, registerLimit, loginLimit, refreshLimit)
@@ -121,25 +121,25 @@ func (c *Container) registerModules() error {
 
 	commentsRepo := comments.NewRepository(c.DB, c.Cfg.Jobs.MaxAttempts)
 	commentsModule := comments.NewModule(commentsRepo, postsRepo)
-	commentLimit := ratelimit.Middleware(c.Redis, c.Keys, "comment:write", c.Cfg.RateLimit.CommentPerMinute, ratelimit.ByUser)
+	commentLimit := ratelimit.MiddlewareWithMetrics(c.Redis, c.Keys, "comment:write", c.Cfg.RateLimit.CommentPerMinute, ratelimit.ByUser, c.engine.Metrics())
 	commentsModule.Register(router, authMW, commentLimit)
 
 	if c.Cfg.AI.IndexingEnabled || c.Cfg.AI.RAGEnabled {
 		aiRepo := aimod.NewRepository(c.DB, c.Cfg.Jobs.MaxAttempts)
 		var rag *aimod.RAGService
 		if c.Cfg.AI.RAGEnabled {
-			embedder, err := openaicompat.New(c.Cfg.AI.Embedding.BaseURL, c.Cfg.AI.Embedding.APIKey, c.Cfg.AI.Embedding.Timeout, c.Cfg.AI.Embedding.MaxRetries)
+			embedder, err := openaicompat.NewWithMetrics(c.Cfg.AI.Embedding.BaseURL, c.Cfg.AI.Embedding.APIKey, c.Cfg.AI.Embedding.Timeout, c.Cfg.AI.Embedding.MaxRetries, c.engine.Metrics())
 			if err != nil {
 				return err
 			}
-			chat, err := openaicompat.New(c.Cfg.AI.Chat.BaseURL, c.Cfg.AI.Chat.APIKey, c.Cfg.AI.Chat.Timeout, c.Cfg.AI.Chat.MaxRetries)
+			chat, err := openaicompat.NewWithMetrics(c.Cfg.AI.Chat.BaseURL, c.Cfg.AI.Chat.APIKey, c.Cfg.AI.Chat.Timeout, c.Cfg.AI.Chat.MaxRetries, c.engine.Metrics())
 			if err != nil {
 				return err
 			}
-			vectors := aimod.NewMilvusStore(c.Cfg.Milvus, c.Cfg.AI.Embedding.Dimensions)
+			vectors := aimod.NewMilvusStoreWithMetrics(c.Cfg.Milvus, c.Cfg.AI.Embedding.Dimensions, c.engine.Metrics())
 			rag = aimod.NewRAGService(c.DB, embedder, chat, vectors, c.Cfg.AI)
 		}
-		aiLimit := ratelimit.StrictMiddleware(c.Redis, c.Keys, "ai:ask", c.Cfg.RateLimit.AIPerMinute, ratelimit.ByIP)
+		aiLimit := ratelimit.StrictMiddlewareWithMetrics(c.Redis, c.Keys, "ai:ask", c.Cfg.RateLimit.AIPerMinute, ratelimit.ByIP, c.engine.Metrics())
 		aimod.NewModule(aiRepo, rag).Register(router, adminMW, aiLimit)
 	}
 

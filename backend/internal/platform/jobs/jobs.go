@@ -279,23 +279,36 @@ func (c *Consumer) LockedBy() string { return c.lockedBy }
 // ReapStaleJobs releases locks held by dead workers. Jobs that exhausted their
 // attempt budget become dead instead of being reclaimed forever.
 func (c *Consumer) ReapStaleJobs(ctx context.Context) error {
+	_, err := c.ReapStaleJobsCount(ctx)
+	return err
+}
+
+func (c *Consumer) ReapStaleJobsCount(ctx context.Context) (int64, error) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-time.Duration(c.lockSeconds) * time.Second)
-	return c.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&domain.Job{}).
+	var reclaimed int64
+	err := c.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		dead := tx.Model(&domain.Job{}).
 			Where("status = 'running' AND locked_at < ? AND attempts >= max_attempts", cutoff).
 			Updates(map[string]interface{}{
 				"status": "dead", "locked_by": nil, "locked_at": nil,
 				"last_error": "worker lock expired after final attempt", "finished_at": now, "updated_at": now,
-			}).Error; err != nil {
-			return err
+			})
+		if dead.Error != nil {
+			return dead.Error
 		}
-		return tx.Model(&domain.Job{}).
+		pending := tx.Model(&domain.Job{}).
 			Where("status = 'running' AND locked_at < ? AND attempts < max_attempts", cutoff).
 			Updates(map[string]interface{}{
 				"status": "pending", "locked_by": nil, "locked_at": nil, "run_after": now, "updated_at": now,
-			}).Error
+			})
+		if pending.Error != nil {
+			return pending.Error
+		}
+		reclaimed = dead.RowsAffected + pending.RowsAffected
+		return nil
 	})
+	return reclaimed, err
 }
 
 // --- Job handler registry ---

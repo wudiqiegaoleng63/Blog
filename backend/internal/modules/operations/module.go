@@ -27,9 +27,10 @@ type dependencyChecker interface {
 
 // Module 装配运维路由。
 type Module struct {
-	cfg   *config.Config
-	mysql dependencyChecker
-	redis dependencyChecker
+	cfg     *config.Config
+	mysql   dependencyChecker
+	redis   dependencyChecker
+	metrics http.Handler
 }
 
 type mysqlChecker struct {
@@ -63,6 +64,12 @@ func NewModule(cfg *config.Config, db *gorm.DB, redisClient *redis.Client) *Modu
 	return newModule(cfg, mysqlChecker{db: db}, redisChecker{client: redisClient})
 }
 
+func NewModuleWithMetrics(cfg *config.Config, db *gorm.DB, redisClient *redis.Client, metrics http.Handler) *Module {
+	module := newModule(cfg, mysqlChecker{db: db}, redisChecker{client: redisClient})
+	module.metrics = metrics
+	return module
+}
+
 func newModule(cfg *config.Config, mysql, redis dependencyChecker) *Module {
 	return &Module{cfg: cfg, mysql: mysql, redis: redis}
 }
@@ -71,6 +78,9 @@ func newModule(cfg *config.Config, mysql, redis dependencyChecker) *Module {
 func (m *Module) Register(r *gin.Engine) {
 	r.GET("/health/live", m.live)
 	r.GET("/health/ready", m.ready)
+	if m.metrics != nil {
+		r.GET("/metrics", gin.WrapH(m.metrics))
+	}
 }
 
 func (m *Module) live(c *gin.Context) {

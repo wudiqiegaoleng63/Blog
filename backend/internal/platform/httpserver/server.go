@@ -23,9 +23,10 @@ import (
 
 // Engine 持有装配好的 Gin 引擎与依赖。
 type Engine struct {
-	cfg    *config.Config
-	logger *observability.Logger
-	router *gin.Engine
+	cfg     *config.Config
+	logger  *observability.Logger
+	metrics *observability.Metrics
+	router  *gin.Engine
 }
 
 // New 创建 Gin 引擎并注册全局中间件。路由由各模块通过 Register 注册。
@@ -49,10 +50,11 @@ func New(cfg *config.Config, logger *observability.Logger) (*Engine, error) {
 		return nil, err
 	}
 
+	metrics := observability.NewMetrics()
 	r.Use(
 		RequestID(cfg.Observability.RequestIDHeader),
 		Recovery(logger),
-		RequestLog(logger),
+		RequestMetrics(logger, metrics),
 		RequestTimeout(cfg.App.RequestTimeout),
 		CORS(cfg.CORS),
 		MaxBody(cfg.HTTP.MaxBodyBytes),
@@ -63,11 +65,14 @@ func New(cfg *config.Config, logger *observability.Logger) (*Engine, error) {
 		c.Error(apperr.NotFound("route not found"))
 	})
 
-	return &Engine{cfg: cfg, logger: logger, router: r}, nil
+	return &Engine{cfg: cfg, logger: logger, metrics: metrics, router: r}, nil
 }
 
 // Router 返回底层 *gin.Engine，供模块注册路由。
 func (e *Engine) Router() *gin.Engine { return e.router }
+
+// Metrics returns the process metrics registry used by HTTP and AI callers.
+func (e *Engine) Metrics() *observability.Metrics { return e.metrics }
 
 // Serve 启动 HTTP 服务并在收到 ctx 取消时优雅关闭。
 func (e *Engine) Serve(ctx context.Context) error {
@@ -151,20 +156,32 @@ func Recovery(logger *observability.Logger) gin.HandlerFunc {
 	}
 }
 
-// RequestLog 记录每个请求的方法、路径、状态、耗时。
-func RequestLog(logger *observability.Logger) gin.HandlerFunc {
+// RequestMetrics records bounded route metrics and structured request logs.
+func RequestMetrics(logger *observability.Logger, metrics *observability.Metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
 
+		status := c.Writer.Status()
+		route := c.FullPath()
+		if route == "" {
+			route = "unmatched"
+		}
+		metrics.ObserveHTTP(c.Request.Method, route, status, time.Since(start))
 		logger.WithContext(c.Request.Context()).Info("http request",
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
-			"status", c.Writer.Status(),
+			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"ip", c.ClientIP(),
 		)
 	}
+}
+
+// RequestLog is retained as a small compatibility wrapper for callers that
+// only need structured request logs.
+func RequestLog(logger *observability.Logger) gin.HandlerFunc {
+	return RequestMetrics(logger, observability.NewMetrics())
 }
 
 // RequestTimeout bounds request-scoped downstream work. It does not forcibly

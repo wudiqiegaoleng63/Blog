@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,27 @@ func TestHealthRoutes(t *testing.T) {
 			t.Fatalf("details = %#v, want degraded mysql/down redis/degraded", body.Error.Details)
 		}
 	})
+}
+
+func TestMetricsRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{Observability: config.ObservabilityConfig{RequestIDHeader: "X-Request-ID"}}
+	engine, err := httpserver.New(cfg, observability.New(cfg.Observability))
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	NewModuleWithMetrics(cfg, nil, nil, engine.Metrics().Handler()).Register(engine.Router())
+
+	response := httptest.NewRecorder()
+	engine.Router().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	response = httptest.NewRecorder()
+	engine.Router().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("metrics status=%d content-type=%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(response.Body.String(), `blog_http_requests_total{method="GET",route="/health/live",status="200"} 1`) {
+		t.Fatalf("metrics body missing health route: %s", response.Body.String())
+	}
 }
 
 func TestReadinessChecksDependenciesConcurrently(t *testing.T) {

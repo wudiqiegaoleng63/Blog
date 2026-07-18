@@ -13,11 +13,13 @@ INTEGRATION_MYSQL_DSN ?= blog_test:integration-only-password@tcp(127.0.0.1:$(INT
 INTEGRATION_REDIS_PORT ?= 36379
 INTEGRATION_REDIS_ADDR ?= 127.0.0.1:$(INTEGRATION_REDIS_PORT)
 INTEGRATION_REDIS_PASSWORD ?= integration-only-redis-password
+INTEGRATION_MILVUS_PORT ?= 39530
+INTEGRATION_MILVUS_ADDR ?= 127.0.0.1:$(INTEGRATION_MILVUS_PORT)
 GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
-.PHONY: help fmt fmt-check test test-race test-integration vet build frontend-check check verify verify-integration migrate-list compose-config compose-build up dev-up down logs ps
+.PHONY: help fmt fmt-check privacy-check test test-race test-integration test-integration-basic vet build frontend-check frontend-smoke check verify verify-integration verify-integration-basic migrate-list compose-config compose-secrets-config compose-build backup-mysql restore-mysql verify-backup up dev-up down logs ps
 
 help: ## 显示可用命令
 	@printf '%s\n' \
@@ -25,12 +27,13 @@ help: ## 显示可用命令
 	  '' \
 	  '  make help             Show this help' \
 	  '  make fmt              Format all Go source files' \
+	  '  make privacy-check    Detect tracked secrets and private artifacts' \
 	  '  make test             Run all Go tests' \
 	  '  make vet              Run go vet' \
 	  '  make build            Build api, worker, and migrate into ./bin' \
 	  '  make check            Check formatting, vet, tests, and builds' \
 	  '  make verify           Add race tests and Compose validation' \
-	  '  make verify-integration  Run ephemeral MySQL integration tests' \
+	  '  make verify-integration  Run ephemeral MySQL/Redis/Milvus integration tests' \
 	  '  make migrate-list     List embedded SQL migration versions' \
 	  '  make compose-config   Validate Compose without printing secrets' \
 	  '  make compose-build    Build Compose application images' \
@@ -55,6 +58,9 @@ fmt-check: ## 检查 Go 格式但不修改文件
 	unformatted="$$(gofmt -l $$files)"; \
 	if [ -n "$$unformatted" ]; then printf 'Unformatted Go files:\n%s\n' "$$unformatted" >&2; exit 1; fi
 
+privacy-check: ## 检查误跟踪 Secret、备份和凭据模式
+	@"$(ROOT_DIR)/scripts/security/check-privacy.sh"
+
 test: ## 运行 Go 测试
 	@cd "$(BACKEND_DIR)" && "$(GO)" test ./...
 
@@ -70,23 +76,35 @@ build: ## 构建三个后端命令
 frontend-check: ## 检查 Frontend lint、test 和 production build
 	@cd "$(FRONTEND_DIR)" && npm run lint && npm run test && npm run build
 
-check: fmt-check vet test build frontend-check ## 执行 Stage 4 本地质量检查
+frontend-smoke: ## 运行 Playwright 浏览器 smoke
+	@cd "$(FRONTEND_DIR)" && npm run build && npm run test:e2e
+
+check: privacy-check fmt-check vet test build frontend-check ## 执行本地隐私与质量检查
 
 # The race detector is intentionally separate because it is slower than the
 # default local check and needs a larger memory budget in CI.
 test-race: ## 运行 Go race detector
 	@cd "$(BACKEND_DIR)" && "$(GO)" test -race ./...
 
-test-integration: ## 使用已运行的测试 MySQL/Redis 执行真实依赖集成测试
+test-integration: ## 使用已运行的测试 MySQL/Redis/Milvus 执行真实依赖集成测试
+	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' TEST_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)' TEST_REDIS_PASSWORD='$(INTEGRATION_REDIS_PASSWORD)' TEST_MILVUS_ADDR='$(INTEGRATION_MILVUS_ADDR)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/platform/ratelimit ./internal/bootstrap ./internal/modules/ai
+
+test-integration-basic: ## 使用已运行的测试 MySQL/Redis 执行基础集成测试
 	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' TEST_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)' TEST_REDIS_PASSWORD='$(INTEGRATION_REDIS_PASSWORD)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/platform/ratelimit ./internal/bootstrap
 
 verify: check test-race compose-config ## 执行发布前静态质量门禁
 
-verify-integration: ## 临时启动 MySQL/Redis，执行 migration、认证、限流与任务验收
+verify-integration: ## 临时启动 MySQL/Redis/Milvus，执行完整 Stage 5.1-A 验收
+	@set -eu; \
+	trap 'INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_MILVUS_PORT="$(INTEGRATION_MILVUS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT INT TERM; \
+	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_MILVUS_PORT="$(INTEGRATION_MILVUS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d --wait; \
+	$(MAKE) test-integration INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)' INTEGRATION_MILVUS_PORT="$(INTEGRATION_MILVUS_PORT)" INTEGRATION_MILVUS_ADDR='$(INTEGRATION_MILVUS_ADDR)'
+
+verify-integration-basic: ## 临时启动 MySQL/Redis，执行基础 Stage 5 验收
 	@set -eu; \
 	trap 'INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT INT TERM; \
-	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d --wait; \
-	$(MAKE) test-integration INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)'
+	INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" $(DOCKER_COMPOSE) -f "$(COMPOSE_INTEGRATION_FILE)" up -d mysql-integration redis-integration --wait; \
+	$(MAKE) test-integration-basic INTEGRATION_MYSQL_PORT="$(INTEGRATION_MYSQL_PORT)" INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' INTEGRATION_REDIS_PORT="$(INTEGRATION_REDIS_PORT)" INTEGRATION_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)'
 
 migrate-list: ## 列出内嵌迁移；不连接数据库
 	@cd "$(BACKEND_DIR)" && "$(GO)" run ./cmd/migrate list
@@ -95,6 +113,19 @@ compose-config: ## 静默校验 Compose，避免把 secret 打到终端
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env first.\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) config --quiet
 	@printf 'Compose configuration is valid: %s\n' "$(COMPOSE_FILE)"
+
+compose-secrets-config: ## 校验 production secrets overlay
+	@test -n "$(SECRETS_DIR)" || { printf 'SECRETS_DIR is required\n' >&2; exit 1; }
+	@SECRETS_DIR="$(SECRETS_DIR)" $(COMPOSE) -f "$(ROOT_DIR)/deploy/compose.secrets.yaml" config --quiet
+
+backup-mysql: ## 创建校验和保护的 MySQL gzip 备份
+	@"$(ROOT_DIR)/scripts/operations/backup-mysql.sh"
+
+restore-mysql: ## 恢复到显式确认的隔离 MySQL 目标
+	@"$(ROOT_DIR)/scripts/operations/restore-mysql.sh"
+
+verify-backup: ## 在临时 MySQL 8.4 容器中验证备份恢复
+	@"$(ROOT_DIR)/scripts/operations/verify-backup.sh"
 
 compose-build: ## 构建 Compose 后端镜像
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }

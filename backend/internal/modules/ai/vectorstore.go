@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lsy/blog/internal/config"
+	"github.com/lsy/blog/internal/platform/observability"
 )
 
 const maxMilvusResponseBytes = 8 << 20
@@ -55,9 +56,14 @@ type MilvusStore struct {
 	httpClient *http.Client
 	mu         sync.Mutex
 	ready      bool
+	metrics    *observability.Metrics
 }
 
 func NewMilvusStore(cfg config.MilvusConfig, dimensions int) *MilvusStore {
+	return NewMilvusStoreWithMetrics(cfg, dimensions, nil)
+}
+
+func NewMilvusStoreWithMetrics(cfg config.MilvusConfig, dimensions int, metrics *observability.Metrics) *MilvusStore {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.Addr), "/")
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "http://" + baseURL
@@ -66,7 +72,7 @@ func NewMilvusStore(cfg config.MilvusConfig, dimensions int) *MilvusStore {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	return &MilvusStore{cfg: cfg, dimensions: dimensions, baseURL: baseURL, httpClient: &http.Client{Timeout: timeout}}
+	return &MilvusStore{cfg: cfg, dimensions: dimensions, baseURL: baseURL, httpClient: &http.Client{Timeout: timeout}, metrics: metrics}
 }
 
 type milvusResponse struct {
@@ -109,7 +115,7 @@ func (s *MilvusStore) createCollection(ctx context.Context) error {
 	request := map[string]any{
 		"collectionName": s.cfg.CollectionName,
 		"schema": map[string]any{
-			"autoId": false, "enableDynamicField": false,
+			"autoID": false, "enableDynamicField": false,
 			"fields": []map[string]any{
 				{"fieldName": "chunk_id", "dataType": "VarChar", "isPrimary": true, "elementTypeParams": map[string]any{"max_length": 128}},
 				{"fieldName": "post_id", "dataType": "VarChar", "elementTypeParams": map[string]any{"max_length": 26}},
@@ -179,6 +185,56 @@ func (s *MilvusStore) deletePostReady(ctx context.Context, postID string) error 
 	return nil
 }
 
+type milvusSearchEntity struct {
+	PostID         string `json:"post_id"`
+	PostSlug       string `json:"post_slug"`
+	ContentVersion uint64 `json:"content_version"`
+	ChunkIndex     int    `json:"chunk_index"`
+	Text           string `json:"text"`
+}
+
+type milvusSearchRow struct {
+	PostID         string              `json:"post_id"`
+	PostSlug       string              `json:"post_slug"`
+	ContentVersion uint64              `json:"content_version"`
+	ChunkIndex     int                 `json:"chunk_index"`
+	Text           string              `json:"text"`
+	Distance       float32             `json:"distance"`
+	Entity         *milvusSearchEntity `json:"entity"`
+}
+
+func decodeMilvusSearchData(data json.RawMessage) ([]milvusSearchRow, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	var grouped [][]milvusSearchRow
+	if err := json.Unmarshal(data, &grouped); err == nil {
+		if len(grouped) == 0 {
+			return nil, nil
+		}
+		return grouped[0], nil
+	}
+	var rows []milvusSearchRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r milvusSearchRow) hit() VectorHit {
+	postID, postSlug := r.PostID, r.PostSlug
+	version, index := r.ContentVersion, r.ChunkIndex
+	text := r.Text
+	if r.Entity != nil {
+		postID, postSlug = r.Entity.PostID, r.Entity.PostSlug
+		version, index, text = r.Entity.ContentVersion, r.Entity.ChunkIndex, r.Entity.Text
+	}
+	return VectorHit{
+		PostID: postID, PostSlug: postSlug, ContentVersion: version,
+		Index: index, Text: text, Score: r.Distance,
+	}
+}
+
 func (s *MilvusStore) Search(ctx context.Context, vector []float32, limit int) ([]VectorHit, error) {
 	if len(vector) != s.dimensions || limit <= 0 {
 		return nil, errors.New("ai: invalid search vector or limit")
@@ -195,22 +251,13 @@ func (s *MilvusStore) Search(ctx context.Context, vector []float32, limit int) (
 	if err := s.call(ctx, "/v2/vectordb/entities/search", request, &response); err != nil {
 		return nil, fmt.Errorf("ai: search milvus: %w", err)
 	}
-	var rows []struct {
-		PostID         string  `json:"post_id"`
-		PostSlug       string  `json:"post_slug"`
-		ContentVersion uint64  `json:"content_version"`
-		ChunkIndex     int     `json:"chunk_index"`
-		Text           string  `json:"text"`
-		Distance       float32 `json:"distance"`
-	}
-	if len(response.Data) > 0 && string(response.Data) != "null" {
-		if err := json.Unmarshal(response.Data, &rows); err != nil {
-			return nil, fmt.Errorf("ai: decode milvus search: %w", err)
-		}
+	rows, err := decodeMilvusSearchData(response.Data)
+	if err != nil {
+		return nil, fmt.Errorf("ai: decode milvus search: %w", err)
 	}
 	hits := make([]VectorHit, len(rows))
 	for i, row := range rows {
-		hits[i] = VectorHit{PostID: row.PostID, PostSlug: row.PostSlug, ContentVersion: row.ContentVersion, Index: row.ChunkIndex, Text: row.Text, Score: row.Distance}
+		hits[i] = row.hit()
 	}
 	return hits, nil
 }
@@ -237,12 +284,15 @@ func (s *MilvusStore) call(ctx context.Context, path string, request any, respon
 	if s.cfg.Username != "" || s.cfg.Password != "" {
 		req.Header.Set("Authorization", "Bearer "+s.cfg.Username+":"+s.cfg.Password)
 	}
+	start := time.Now()
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		s.metrics.ObserveUpstream("milvus", milvusOperation(path), 0, time.Since(start))
 		return err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMilvusResponseBytes+1))
+	s.metrics.ObserveUpstream("milvus", milvusOperation(path), resp.StatusCode, time.Since(start))
 	if err != nil {
 		return err
 	}
@@ -259,6 +309,23 @@ func (s *MilvusStore) call(ctx context.Context, path string, request any, respon
 		return &MilvusError{Code: response.Code, Message: response.Message}
 	}
 	return nil
+}
+
+func milvusOperation(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[len(parts)-1] == "" {
+		return "unknown"
+	}
+	return boundedMilvusOperation(parts[len(parts)-1])
+}
+
+func boundedMilvusOperation(value string) string {
+	switch value {
+	case "describe", "create", "load", "delete", "upsert", "search":
+		return value
+	default:
+		return "other"
+	}
 }
 
 func collectionDimensionMatches(data json.RawMessage, dimensions int) bool {
