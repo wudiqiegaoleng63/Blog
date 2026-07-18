@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,38 @@ func baseEnv() map[string]string {
 	}
 }
 
+func TestLoad_ReadsSecretFiles(t *testing.T) {
+	dir := t.TempDir()
+	jwtPath := dir + "/jwt"
+	dsnPath := dir + "/dsn"
+	if err := os.WriteFile(jwtPath, []byte("file-secret-must-be-at-least-thirty-two-bytes-long\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dsnPath, []byte("blog:blog@tcp(localhost:3306)/blog?parseTime=true&loc=UTC&charset=utf8mb4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setEnv(t, map[string]string{
+		"APP_ENV": "dev", "APP_SERVICE_MODE": "api", "HTTP_TRUSTED_PROXIES": "127.0.0.0/8",
+		"MYSQL_DSN_FILE": dsnPath, "JWT_SECRET_FILE": jwtPath,
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Auth.JWTSecret != "file-secret-must-be-at-least-thirty-two-bytes-long" || !strings.HasPrefix(cfg.MySQL.DSN, "blog:blog@") {
+		t.Fatalf("secret file values not loaded")
+	}
+}
+
+func TestLoad_MissingSecretFileFails(t *testing.T) {
+	setEnv(t, baseEnv())
+	t.Setenv("JWT_SECRET", "")
+	t.Setenv("JWT_SECRET_FILE", t.TempDir()+"/missing")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "JWT_SECRET_FILE") {
+		t.Fatalf("Load() error = %v, want missing secret file error", err)
+	}
+}
+
 func TestLoad_ValidDev(t *testing.T) {
 	setEnv(t, baseEnv())
 	cfg, err := Load()
@@ -34,6 +67,9 @@ func TestLoad_ValidDev(t *testing.T) {
 	}
 	if cfg.AI.Enabled {
 		t.Fatalf("AI should be disabled by default")
+	}
+	if cfg.Observability.MetricsAddr != ":9090" {
+		t.Fatalf("metrics addr = %q, want :9090", cfg.Observability.MetricsAddr)
 	}
 }
 

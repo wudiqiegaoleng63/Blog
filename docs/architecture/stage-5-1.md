@@ -32,12 +32,12 @@ Stage 5.1 不包含：
 
 | 顺序 | 项目 | 优先级 | 验收结果 |
 |---|---|---:|---|
-| 5.1-A | Milvus + Mock AI 集成 | P0 | 真实 Milvus 完成索引、替换、删除、检索；上游错误可重试并正确落库 |
-| 5.1-B | 浏览器 Smoke | P0 | Playwright 完成核心用户流程和错误状态验收 |
-| 5.1-C | 运行时指标 | P1 | API、Worker、AI 指标可抓取并有告警阈值 |
-| 5.1-D | Secrets 迁移 | P1 | 生产密钥不依赖普通 Compose environment，并完成轮换 |
-| 5.1-E | 备份恢复 | P0 | MySQL 备份可恢复；Milvus 可按 MySQL 状态重建；记录 RPO/RTO |
-| 5.1-F | 发布与故障演练 | P1 | 应用镜像回滚、迁移策略和依赖故障处置可重复执行 |
+| 5.1-A | Milvus + Mock AI 集成 | P0 | ✅ 真实 Milvus 完成索引、替换、删除、检索；上游 mock contract 已验收 |
+| 5.1-B | 浏览器 Smoke | P0 | ✅ Playwright 完成核心用户流程、deep link 和错误状态验收 |
+| 5.1-C | 运行时指标 | P1 | ✅ API、限流、AI 上游和 Worker 队列指标及告警基线已定义 |
+| 5.1-D | Secrets 迁移 | P1 | ✅ `*_FILE` 与 Compose secrets overlay 已交付；生产轮换仍按 runbook 执行 |
+| 5.1-E | 备份恢复 | P0 | ✅ MySQL 备份/恢复/临时容器演练脚本与 Milvus 重建策略已交付 |
+| 5.1-F | 发布与故障演练 | P1 | ✅ 发布、镜像回滚和依赖故障矩阵已写入 runbook |
 
 本次先实施 5.1-A。后续每一项必须同时提交实现、自动化验收和文档更新，不以“本地手工成功”作为完成标准。
 

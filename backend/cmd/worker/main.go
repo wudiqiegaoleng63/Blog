@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -58,6 +60,15 @@ func main() {
 		}
 	}()
 
+	metrics := observability.NewMetrics()
+	metricsServer := startMetricsServer(rootCtx, c.Logger, cfg.Observability.MetricsAddr, metrics)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			c.Logger.Warn("worker metrics shutdown failed", "error", err)
+		}
+	}()
 	consumer := jobs.NewConsumer(c.DB, cfg.Jobs)
 	registry := jobs.NewRegistry()
 	commentsRepo := comments.NewRepository(c.DB, cfg.Jobs.MaxAttempts)
@@ -65,12 +76,12 @@ func main() {
 		return commentsRepo.Moderate(ctx, job.PayloadJSON)
 	})
 	if cfg.AI.IndexingEnabled {
-		embedder, err := openaicompat.New(cfg.AI.Embedding.BaseURL, cfg.AI.Embedding.APIKey, cfg.AI.Embedding.Timeout, cfg.AI.Embedding.MaxRetries)
+		embedder, err := openaicompat.NewWithMetrics(cfg.AI.Embedding.BaseURL, cfg.AI.Embedding.APIKey, cfg.AI.Embedding.Timeout, cfg.AI.Embedding.MaxRetries, metrics)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "embedding client setup failed: %v\n", err)
 			os.Exit(1)
 		}
-		vectors := aimod.NewMilvusStore(cfg.Milvus, cfg.AI.Embedding.Dimensions)
+		vectors := aimod.NewMilvusStoreWithMetrics(cfg.Milvus, cfg.AI.Embedding.Dimensions, metrics)
 		defer vectors.Close(context.Background())
 		indexer := aimod.NewIndexer(aimod.NewRepository(c.DB, cfg.Jobs.MaxAttempts), embedder, vectors, cfg.AI)
 		registry.Register(aimod.IndexJobType, func(ctx context.Context, job *domain.Job) error {
@@ -95,8 +106,10 @@ func main() {
 	statsTicker := time.NewTicker(workerStatsInterval)
 	defer statsTicker.Stop()
 
-	if err := consumer.ReapStaleJobs(rootCtx); err != nil {
+	if count, err := consumer.ReapStaleJobsCount(rootCtx); err != nil {
 		c.Logger.Warn("initial stale job recovery failed", "error", err)
+	} else {
+		metrics.ObserveWorkerReclaims(count)
 	}
 	_ = touchHeartbeat()
 
@@ -106,18 +119,21 @@ func main() {
 			c.Logger.Info("worker shutting down")
 			return
 		case <-reap.C:
-			if err := consumer.ReapStaleJobs(rootCtx); err != nil {
+			if count, err := consumer.ReapStaleJobsCount(rootCtx); err != nil {
 				c.Logger.Warn("stale job recovery failed", "error", err)
+			} else {
+				metrics.ObserveWorkerReclaims(count)
 			}
-			logQueueStats(rootCtx, c.Logger, consumer)
+			logQueueStats(rootCtx, c.Logger, consumer, metrics)
 			_ = touchHeartbeat()
 		case <-statsTicker.C:
-			logQueueStats(rootCtx, c.Logger, consumer)
+			logQueueStats(rootCtx, c.Logger, consumer, metrics)
 			_ = touchHeartbeat()
 		case <-poll.C:
 			_ = touchHeartbeat()
 			claimed, err := consumer.Claim(rootCtx)
 			if err != nil {
+				metrics.ObserveWorkerClaimError()
 				c.Logger.Warn("claim jobs failed", "error", err)
 				continue
 			}
@@ -136,6 +152,7 @@ func main() {
 					cancel()
 
 					if err != nil {
+						metrics.ObserveWorkerJob(job.JobType, "failed")
 						c.Logger.Warn("job failed",
 							"job_id", job.PublicID,
 							"job_type", job.JobType,
@@ -146,7 +163,10 @@ func main() {
 							c.Logger.Error("record job failure failed", "job_id", job.PublicID, "error", failErr)
 						}
 					} else if completeErr := consumer.Complete(context.Background(), job.ID); completeErr != nil {
+						metrics.ObserveWorkerJob(job.JobType, "complete_error")
 						c.Logger.Error("complete job failed", "job_id", job.PublicID, "error", completeErr)
+					} else {
+						metrics.ObserveWorkerJob(job.JobType, "completed")
 					}
 				}()
 			}
@@ -159,12 +179,33 @@ func main() {
 	}
 }
 
-func logQueueStats(ctx context.Context, logger *observability.Logger, consumer *jobs.Consumer) {
+func startMetricsServer(ctx context.Context, logger *observability.Logger, addr string, metrics *observability.Metrics) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 3 * time.Second}
+	go func() {
+		logger.Info("worker metrics listening", "addr", addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("worker metrics server failed", "error", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	return server
+}
+
+func logQueueStats(ctx context.Context, logger *observability.Logger, consumer *jobs.Consumer, metrics *observability.Metrics) {
 	stats, err := consumer.QueueStats(ctx)
 	if err != nil {
 		logger.Warn("queue stats failed", "error", err)
 		return
 	}
+	metrics.SetQueueStats(stats)
+	metrics.SetHeartbeatAge(0)
 	logger.Info("queue stats",
 		"pending", stats.Pending,
 		"running", stats.Running,

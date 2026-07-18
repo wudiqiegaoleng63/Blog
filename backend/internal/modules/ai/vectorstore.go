@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lsy/blog/internal/config"
+	"github.com/lsy/blog/internal/platform/observability"
 )
 
 const maxMilvusResponseBytes = 8 << 20
@@ -55,9 +56,14 @@ type MilvusStore struct {
 	httpClient *http.Client
 	mu         sync.Mutex
 	ready      bool
+	metrics    *observability.Metrics
 }
 
 func NewMilvusStore(cfg config.MilvusConfig, dimensions int) *MilvusStore {
+	return NewMilvusStoreWithMetrics(cfg, dimensions, nil)
+}
+
+func NewMilvusStoreWithMetrics(cfg config.MilvusConfig, dimensions int, metrics *observability.Metrics) *MilvusStore {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.Addr), "/")
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "http://" + baseURL
@@ -66,7 +72,7 @@ func NewMilvusStore(cfg config.MilvusConfig, dimensions int) *MilvusStore {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	return &MilvusStore{cfg: cfg, dimensions: dimensions, baseURL: baseURL, httpClient: &http.Client{Timeout: timeout}}
+	return &MilvusStore{cfg: cfg, dimensions: dimensions, baseURL: baseURL, httpClient: &http.Client{Timeout: timeout}, metrics: metrics}
 }
 
 type milvusResponse struct {
@@ -278,12 +284,15 @@ func (s *MilvusStore) call(ctx context.Context, path string, request any, respon
 	if s.cfg.Username != "" || s.cfg.Password != "" {
 		req.Header.Set("Authorization", "Bearer "+s.cfg.Username+":"+s.cfg.Password)
 	}
+	start := time.Now()
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		s.metrics.ObserveUpstream("milvus", milvusOperation(path), 0, time.Since(start))
 		return err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMilvusResponseBytes+1))
+	s.metrics.ObserveUpstream("milvus", milvusOperation(path), resp.StatusCode, time.Since(start))
 	if err != nil {
 		return err
 	}
@@ -300,6 +309,23 @@ func (s *MilvusStore) call(ctx context.Context, path string, request any, respon
 		return &MilvusError{Code: response.Code, Message: response.Message}
 	}
 	return nil
+}
+
+func milvusOperation(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[len(parts)-1] == "" {
+		return "unknown"
+	}
+	return boundedMilvusOperation(parts[len(parts)-1])
+}
+
+func boundedMilvusOperation(value string) string {
+	switch value {
+	case "describe", "create", "load", "delete", "upsert", "search":
+		return value
+	default:
+		return "other"
+	}
 }
 
 func collectionDimensionMatches(data json.RawMessage, dimensions int) bool {

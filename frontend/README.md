@@ -9,6 +9,7 @@ npm ci
 npm run dev
 npm run lint
 npm run test
+npm run test:e2e
 npm run build
 ```
 

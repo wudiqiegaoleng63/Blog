@@ -81,11 +81,22 @@ docker compose --env-file .env -f deploy/compose.yaml up -d api worker frontend 
 
 ### 逻辑备份
 
-使用与生产兼容的 MySQL client，并把备份写入受控、加密的备份存储：
+仓库提供 `scripts/backup-mysql.sh` 和 Make 入口。密码只从受控文件读取，不进入命令行参数：
+
+```bash
+BACKUP_DIR=/secure/backups \
+MYSQL_HOST=<host> MYSQL_USER=<user> MYSQL_DATABASE=blog \
+MYSQL_PASSWORD_FILE=/run/secrets/mysql_password \
+make backup-mysql
+```
+
+脚本使用临时 0600 MySQL option file、原子重命名并生成 `.sha256`。备份目录仍必须位于受控加密存储。
+
+等价的手工命令：
 
 ```bash
 mysqldump --single-transaction --routines --triggers --events \
-  --hex-blob --set-gtid-purged=OFF \
+  --hex-blob --no-tablespaces --set-gtid-purged=OFF \
   -h "$MYSQL_HOST" -u "$MYSQL_USER" -p "$MYSQL_DATABASE" \
   | gzip > "blog-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
 ```
@@ -93,6 +104,16 @@ mysqldump --single-transaction --routines --triggers --events \
 不要把密码写入命令行历史；使用受控的 client option file、Secret Manager 或交互式输入。
 
 ### 恢复演练
+
+自动化演练会启动临时 MySQL 8.4、校验 SHA-256、恢复并检查核心表和 migration 状态：
+
+```bash
+RESTORE_FILE=/secure/backups/blog-<timestamp>.sql.gz \
+MYSQL_PASSWORD_FILE=/run/secrets/restore_mysql_password \
+make verify-backup
+```
+
+直接运行 `make restore-mysql` 时，必须显式设置 `CONFIRM_RESTORE=restore-<database>`，以减少误覆盖风险。
 
 1. 启动隔离 MySQL 实例；
 2. 导入备份：
@@ -107,6 +128,32 @@ mysqldump --single-transaction --routines --triggers --events \
 6. 记录恢复耗时（RTO）和可接受的数据时间点（RPO）。
 
 恢复演练不能直接覆盖生产数据。
+
+### Milvus 恢复策略
+
+Milvus 是可重建派生索引，不是业务数据唯一真相：
+
+1. 先恢复 MySQL 并确认 `posts`、`ai_documents` 和 migration 状态；
+2. 创建新的空 Milvus collection 或清理受损 collection；
+3. 使用管理员 `/api/v1/ai/reindex` 对全部 published + public 文章重新入队；
+4. 观察 `post_index` 成功率、pending 年龄和 `ai_documents.status`；
+5. 抽样验证公开 RAG 来源，确认 private/draft/deleted 文章被过滤；
+6. 完成后才切换 collection alias 或恢复 AI 流量。
+
+### RPO/RTO 记录模板
+
+```text
+演练时间：
+备份时间点：
+恢复开始/结束：
+RPO：
+RTO：
+MySQL migration version/dirty：
+核心表数量检查：
+Milvus reindex 开始/结束：
+RAG 抽样结果：
+失败步骤与改进：
+```
 
 ## 5. Redis 故障
 
@@ -142,7 +189,33 @@ mysqldump --single-transaction --routines --triggers --events \
 5. 在日志、Compose inspect、CI 输出和备份中搜索是否出现旧密钥；
 6. 记录轮换时间和验证结果。
 
-## 8. 事件升级阈值
+## 8. 发布与故障注入演练
+
+每次 staging 演练必须记录镜像 tag、migration version、开始/结束时间和验证结果。
+
+### 发布/回滚演练
+
+1. 记录旧 backend/frontend immutable tag；
+2. 运行 `make verify`、`make verify-integration` 和 `make frontend-smoke`；
+3. 执行 migration up，再更新 API/Worker/Frontend；
+4. 验证 `/health/live`、`/health/ready`、`/metrics`、登录、文章和评论；
+5. 将镜像 tag 切回旧版本，确认数据库数据和 migration 保持完整；
+6. 如果旧镜像不兼容新 schema，停止回滚并按 expand/contract 方案修复，不执行自动 down。
+
+### 故障矩阵
+
+| 故障 | 预期行为 | 验证 |
+|---|---|---|
+| MySQL 停止 | readiness 503，核心写入失败 | 恢复后数据和队列完整 |
+| Redis 停止 | readiness degraded；认证/评论限流 fail-open；AI fail-closed | 指标出现 fail_open/fail_closed |
+| Milvus 停止 | 博客核心 ready；AI 索引/问答失败并重试 | 恢复或 reindex 后成功 |
+| Embedding 429/5xx/超时 | 有界重试，任务失败后回到 pending/dead | 上游指标按状态分类 |
+| Chat 429/5xx/超时 | Ask 返回稳定 AI unavailable | 不泄露 provider body/key |
+| Worker 停止 | heartbeat 过期、pending 年龄增长 | 重启后 stale lock 回收 |
+
+禁止在生产直接执行破坏性故障注入；先在隔离 staging 使用同版本和同 secret 注入方式完成演练。
+
+## 9. 事件升级阈值
 
 立即升级：
 
@@ -152,5 +225,23 @@ mysqldump --single-transaction --routines --triggers --events \
 - 最老 pending 年龄超过业务 SLO；
 - Refresh replay、认证失败或限流 fail-open 告警异常增长；
 - 备份失败或恢复演练超过 RTO。
+
+## 10. Metrics 与最小告警
+
+API 暴露 `/metrics`（应只允许内网监控系统访问），包括 route-template HTTP 指标、限流事件和 AI 上游状态。Worker 在 `METRICS_ADDR`（默认 `:9090`，Compose 不发布到宿主机）暴露独立 `/metrics`，包含任务结果、claim 错误、stale-lock 回收、队列状态及 Embedding/Milvus 调用。生产应只允许监控网络访问两个 scrape endpoint。
+
+最小阈值：
+
+```text
+oldest pending age > 5m       warning
+oldest pending age > 15m      critical
+dead jobs > 0                 warning
+Worker heartbeat > 90s        critical
+API 5xx ratio > 2%            warning
+AI upstream error ratio > 10% warning
+MySQL readiness failure       critical
+```
+
+指标 label 禁止包含问题、回答、文章正文、Cookie、JWT、API key 或任意用户输入路径。
 
 Stage 5 的目标不是隐藏故障，而是让故障能被及时发现、隔离、恢复并留下可审计记录。

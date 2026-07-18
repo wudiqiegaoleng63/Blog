@@ -21,21 +21,21 @@ x-app-environment: &app-environment
   HTTP_SHUTDOWN_TIMEOUT: ${HTTP_SHUTDOWN_TIMEOUT:-15s}
   HTTP_MAX_BODY_BYTES: ${HTTP_MAX_BODY_BYTES:-2097152}
   HTTP_TRUSTED_PROXIES: ${HTTP_TRUSTED_PROXIES:-172.28.0.0/16}
-  MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; do not URL-encode go-sql-driver/mysql passwords}
+  MYSQL_DSN: ${MYSQL_DSN:-}
   MYSQL_MAX_OPEN_CONNS: ${MYSQL_MAX_OPEN_CONNS:-25}
   MYSQL_MAX_IDLE_CONNS: ${MYSQL_MAX_IDLE_CONNS:-5}
   MYSQL_CONN_MAX_LIFETIME: ${MYSQL_CONN_MAX_LIFETIME:-30m}
   MYSQL_CONN_MAX_IDLE_TIME: ${MYSQL_CONN_MAX_IDLE_TIME:-5m}
   REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
   REDIS_USERNAME: ${REDIS_USERNAME:-}
-  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   REDIS_DB: ${REDIS_DB:-0}
   REDIS_DIAL_TIMEOUT: ${REDIS_DIAL_TIMEOUT:-5s}
   REDIS_READ_TIMEOUT: ${REDIS_READ_TIMEOUT:-3s}
   REDIS_WRITE_TIMEOUT: ${REDIS_WRITE_TIMEOUT:-3s}
   REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-10}
   REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-blog:production:v1:}
-  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required and must be at least 32 bytes}
+  JWT_SECRET: ${JWT_SECRET:-}
   ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
   REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-720h}
   AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-blog_rt}
@@ -94,6 +94,7 @@ x-app-environment: &app-environment
   RAG_MAX_QUESTION_CHARS: ${RAG_MAX_QUESTION_CHARS:-2000}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   LOG_FORMAT: ${LOG_FORMAT:-json}
+  METRICS_ADDR: ${METRICS_ADDR:-:9090}
   REQUEST_ID_HEADER: ${REQUEST_ID_HEADER:-X-Request-ID}
 
 services:
@@ -193,7 +194,7 @@ services:
     command: ["migrate", "up"]
     environment:
       APP_ENV: ${APP_ENV:-production}
-      MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required; do not URL-encode go-sql-driver/mysql passwords}
+      MYSQL_DSN: ${MYSQL_DSN:-}
     depends_on:
       mysql:
         condition: service_healthy
@@ -208,8 +209,8 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-blog}
       MYSQL_USER: ${MYSQL_USER:-blog}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -226,7 +227,7 @@ services:
     image: redis:7.4.5-alpine3.21
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     networks:

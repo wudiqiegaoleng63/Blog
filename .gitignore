@@ -12,6 +12,8 @@
 coverage/
 coverage*.txt
 coverage*.html
+frontend/test-results/
+frontend/playwright-report/
 
 # Claude Code transient worktrees
 .claude/worktrees/

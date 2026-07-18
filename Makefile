@@ -19,7 +19,7 @@ GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
-.PHONY: help fmt fmt-check test test-race test-integration test-integration-basic vet build frontend-check check verify verify-integration verify-integration-basic migrate-list compose-config compose-build up dev-up down logs ps
+.PHONY: help fmt fmt-check test test-race test-integration test-integration-basic vet build frontend-check frontend-smoke check verify verify-integration verify-integration-basic migrate-list compose-config compose-secrets-config compose-build backup-mysql restore-mysql verify-backup up dev-up down logs ps
 
 help: ## 显示可用命令
 	@printf '%s\n' \
@@ -72,6 +72,9 @@ build: ## 构建三个后端命令
 frontend-check: ## 检查 Frontend lint、test 和 production build
 	@cd "$(FRONTEND_DIR)" && npm run lint && npm run test && npm run build
 
+frontend-smoke: ## 运行 Playwright 浏览器 smoke
+	@cd "$(FRONTEND_DIR)" && npm run build && npm run test:e2e
+
 check: fmt-check vet test build frontend-check ## 执行 Stage 4 本地质量检查
 
 # The race detector is intentionally separate because it is slower than the
@@ -106,6 +109,19 @@ compose-config: ## 静默校验 Compose，避免把 secret 打到终端
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env first.\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) config --quiet
 	@printf 'Compose configuration is valid: %s\n' "$(COMPOSE_FILE)"
+
+compose-secrets-config: ## 校验 production secrets overlay
+	@test -n "$(SECRETS_DIR)" || { printf 'SECRETS_DIR is required\n' >&2; exit 1; }
+	@SECRETS_DIR="$(SECRETS_DIR)" $(COMPOSE) -f "$(ROOT_DIR)/deploy/compose.secrets.yaml" config --quiet
+
+backup-mysql: ## 创建校验和保护的 MySQL gzip 备份
+	@"$(ROOT_DIR)/scripts/backup-mysql.sh"
+
+restore-mysql: ## 恢复到显式确认的隔离 MySQL 目标
+	@"$(ROOT_DIR)/scripts/restore-mysql.sh"
+
+verify-backup: ## 在临时 MySQL 8.4 容器中验证备份恢复
+	@"$(ROOT_DIR)/scripts/verify-backup.sh"
 
 compose-build: ## 构建 Compose 后端镜像
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }

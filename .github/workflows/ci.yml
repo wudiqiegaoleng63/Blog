@@ -31,6 +31,8 @@ jobs:
       - run: npm ci --prefix frontend
       - run: make check
       - run: make test-race
+      - run: npx --prefix frontend playwright install --with-deps chromium
+      - run: make frontend-smoke
 
   mysql-integration:
     name: MySQL integration

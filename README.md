@@ -153,6 +153,7 @@ The RAG endpoint embeds your question, retrieves relevant chunks from Milvus, ve
 
 - `/health/live` — process is responsive.
 - `/health/ready` — MySQL down → 503; Redis down → `degraded` but still 200 if MySQL is healthy.
+- `/metrics` — Prometheus-compatible API route, rate-limit, and AI upstream metrics; expose only to the monitoring network.
 - Auth/comment rate limits fail **open** (soft dependency); AI rate limits fail **closed** (cost-sensitive).
 - The Worker doesn't listen on HTTP; Compose checks a heartbeat file to detect stalled polling instead of only checking whether PID 1 exists. It also logs pending/running/dead/completed counts and oldest pending age periodically.
 
@@ -189,7 +190,8 @@ make fmt              # gofmt
 make test             # go test ./...
 make vet              # go vet
 make build            # api, worker, migrate → ./bin
-make frontend-check   # lint + test + production build
+make frontend-check   # lint + unit test + production build
+make frontend-smoke   # Playwright Chromium browser smoke
 make check            # all of the above
 make verify           # check + race detector + Compose validation
 make verify-integration # ephemeral MySQL/Redis: migrations, auth, limits, dual-worker SKIP LOCKED
@@ -224,6 +226,7 @@ RAG additionally needs: `AI_CHAT_BASE_URL`, `AI_CHAT_API_KEY`, `AI_CHAT_MODEL`.
 ## 🔒 Security & deploy notes
 
 - `.env` is gitignored; `.env.example` holds harmless placeholders only.
+- Production can use `deploy/compose.secrets.yaml`; the backend accepts sensitive `*_FILE` variables and reads mounted secrets at startup.
 - Production requires `AUTH_COOKIE_SECURE=true`; terminate TLS at a trusted ingress.
 - CORS origin must not be `*` when credentials are enabled.
 - Set `HTTP_TRUSTED_PROXIES` correctly or IP-based rate limits will see the wrong address.
@@ -258,8 +261,8 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 | 2 | React SPA: reading, writing, session recovery, admin | ✅ |
 | 3 | OpenAI-compatible Embedding, Milvus, article indexing | ✅ |
 | 4 | Chat, semantic retrieval, grounded RAG Q&A | ✅ |
-| 5 | Production hardening, integration acceptance, observability, backup/recovery | 🚧 |
-| 5.1 | Real Milvus/AI integration, browser smoke, metrics, secrets, restore and release drills | 🚧 |
+| 5 | Production hardening, integration acceptance, observability, backup/recovery | ✅ |
+| 5.1 | Real Milvus/AI integration, browser smoke, metrics, secrets, restore and release drills | ✅ |
 
 ---
 
