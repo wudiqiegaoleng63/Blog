@@ -8,6 +8,7 @@ ENV_FILE ?= $(ROOT_DIR)/.env
 COMPOSE_FILE := $(ROOT_DIR)/deploy/compose.yaml
 COMPOSE_DEV_FILE := $(ROOT_DIR)/deploy/compose.dev.yaml
 COMPOSE_INTEGRATION_FILE := $(ROOT_DIR)/deploy/compose.integration.yaml
+COMPOSE_MOCK_AI_FILE := $(ROOT_DIR)/deploy/compose.mock-ai.yaml
 INTEGRATION_MYSQL_PORT ?= 33306
 INTEGRATION_MYSQL_DSN ?= blog_test:integration-only-password@tcp(127.0.0.1:$(INTEGRATION_MYSQL_PORT))/blog_integration?charset=utf8mb4&parseTime=true&loc=UTC
 INTEGRATION_REDIS_PORT ?= 36379
@@ -19,7 +20,7 @@ GO ?= go
 DOCKER_COMPOSE ?= docker compose
 COMPOSE = $(DOCKER_COMPOSE) --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)"
 
-.PHONY: help fmt fmt-check privacy-check test test-race test-integration test-integration-basic vet build frontend-check frontend-smoke check verify verify-integration verify-integration-basic migrate-list compose-config compose-secrets-config compose-build backup-mysql restore-mysql verify-backup up dev-up down logs ps
+.PHONY: help fmt fmt-check privacy-check test test-race test-integration test-integration-basic vet build frontend-check frontend-smoke check verify verify-integration verify-integration-basic migrate-list compose-config compose-mock-ai-config compose-secrets-config compose-build backup-mysql restore-mysql verify-backup up mock-ai-up dev-up down mock-ai-down logs mock-ai-logs ps mock-ai-ps
 
 help: ## 显示可用命令
 	@printf '%s\n' \
@@ -36,12 +37,17 @@ help: ## 显示可用命令
 	  '  make verify-integration  Run ephemeral MySQL/Redis/Milvus integration tests' \
 	  '  make migrate-list     List embedded SQL migration versions' \
 	  '  make compose-config   Validate Compose without printing secrets' \
+	  '  make compose-mock-ai-config  Validate base + Mock AI Compose' \
 	  '  make compose-build    Build Compose application images' \
 	  '  make up               Build and start the base Compose stack' \
+	  '  make mock-ai-up       Start full stack with deterministic Mock AI' \
 	  '  make dev-up           Start with loopback debug ports enabled' \
 	  '  make down             Stop containers; preserve named volumes' \
+	  '  make mock-ai-down     Stop Mock AI stack; preserve named volumes' \
 	  '  make logs             Follow logs from all services' \
+	  '  make mock-ai-logs     Follow Mock AI stack logs' \
 	  '  make ps               Show Compose service status' \
+	  '  make mock-ai-ps       Show Mock AI stack status' \
 	  '' \
 	  'Variables:' \
 	  '  ENV_FILE=/path/to/file       default: ./.env' \
@@ -92,7 +98,7 @@ test-integration: ## 使用已运行的测试 MySQL/Redis/Milvus 执行真实依
 test-integration-basic: ## 使用已运行的测试 MySQL/Redis 执行基础集成测试
 	@cd "$(BACKEND_DIR)" && TEST_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' TEST_REDIS_ADDR='$(INTEGRATION_REDIS_ADDR)' TEST_REDIS_PASSWORD='$(INTEGRATION_REDIS_PASSWORD)' "$(GO)" test -p=1 -tags=integration -count=1 ./internal/platform/jobs ./internal/platform/ratelimit ./internal/bootstrap
 
-verify: check test-race compose-config ## 执行发布前静态质量门禁
+verify: check test-race compose-config compose-mock-ai-config ## 执行发布前静态质量门禁
 
 verify-integration: ## 临时启动 MySQL/Redis/Milvus，执行完整 Stage 5.1-A 验收
 	@set -eu; \
@@ -113,6 +119,11 @@ compose-config: ## 静默校验 Compose，避免把 secret 打到终端
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env first.\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) config --quiet
 	@printf 'Compose configuration is valid: %s\n' "$(COMPOSE_FILE)"
+
+compose-mock-ai-config: ## 校验基础栈与 Mock AI 覆盖
+	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env first.\n' "$(ENV_FILE)" >&2; exit 1; }
+	@$(COMPOSE) -f "$(COMPOSE_MOCK_AI_FILE)" config --quiet
+	@printf 'Mock AI Compose configuration is valid: %s + %s\n' "$(COMPOSE_FILE)" "$(COMPOSE_MOCK_AI_FILE)"
 
 compose-secrets-config: ## 校验 production secrets overlay
 	@test -n "$(SECRETS_DIR)" || { printf 'SECRETS_DIR is required\n' >&2; exit 1; }
@@ -135,18 +146,34 @@ up: ## 启动基础栈；一次性 migrate 会先执行
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env and replace secrets first.\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) up -d --build
 
+mock-ai-up: ## 使用本地确定性 Mock AI 启动完整索引与 RAG 栈
+	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env and replace secrets first.\n' "$(ENV_FILE)" >&2; exit 1; }
+	@$(COMPOSE) -f "$(COMPOSE_MOCK_AI_FILE)" up -d --build --wait --wait-timeout 180
+
 dev-up: ## 启动栈并将 API/MySQL/Redis 调试端口绑定到 loopback
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\nCopy .env.example to .env and replace secrets first.\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) -f "$(COMPOSE_DEV_FILE)" up -d --build
 
-down: ## 停止栈但保留 mysql_data 和 redis_data
+down: ## 停止基础栈但保留命名卷
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) down
 
-logs: ## 持续查看服务日志
+mock-ai-down: ## 停止 Mock AI 栈但保留命名卷
+	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
+	@$(COMPOSE) -f "$(COMPOSE_MOCK_AI_FILE)" down
+
+logs: ## 持续查看基础栈日志
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) logs -f
 
-ps: ## 查看服务状态
+mock-ai-logs: ## 持续查看 Mock AI 栈日志
+	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
+	@$(COMPOSE) -f "$(COMPOSE_MOCK_AI_FILE)" logs -f
+
+ps: ## 查看基础栈状态
 	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
 	@$(COMPOSE) ps
+
+mock-ai-ps: ## 查看 Mock AI 栈状态
+	@test -f "$(ENV_FILE)" || { printf 'Missing ENV_FILE: %s\n' "$(ENV_FILE)" >&2; exit 1; }
+	@$(COMPOSE) -f "$(COMPOSE_MOCK_AI_FILE)" ps

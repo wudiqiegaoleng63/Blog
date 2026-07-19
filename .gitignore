@@ -85,6 +85,7 @@ coverage*.html
 frontend/test-results/
 frontend/playwright-report/
 frontend/blob-report/
+.playwright-mcp/
 
 # Dependencies and tool caches
 node_modules/
