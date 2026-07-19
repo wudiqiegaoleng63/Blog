@@ -1,12 +1,24 @@
-# Blog. 📖✨
+<a id="top"></a>
 
-**Blog.** is a full-stack personal blog platform — semantic indexing, AI-powered question answering, and a warm, editorial reading experience, all shipping from a single `docker compose up`.
+<div align="center">
 
-> 🎉 **Stage 4 complete!** RAG Q&A grounded in published stories, with linked sources. Every article you publish is automatically indexed and ready for natural-language questions.
+# 📖✨ Blog.
 
-[中文文档](README.zh-CN.md)
+**A production-ready full-stack blog with semantic indexing, grounded AI Q&A, and a warm editorial reading experience.**
+
+🌐 **Language / 语言：** **🇺🇸 English** · [🇨🇳 简体中文](README.zh-CN.md)
+
+[✨ Features](#features) · [🚀 Quick start](#quick-start) · [🔌 API](#api) · [🛠️ Development](#development) · [🔒 Security](#security) · [🗺️ Roadmap](#roadmap)
+
+</div>
+
+> 🎉 **Stage 5.1 complete!** The platform now includes real MySQL/Redis/Milvus integration acceptance, browser smoke tests, runtime metrics, secret-file deployment, privacy checks, and verified backup/restore automation.
+
+One `docker compose up` delivers the React SPA, Go API, background Worker, MySQL, Redis, Milvus, and Nginx proxy.
 
 ---
+
+<a id="features"></a>
 
 ## 🧭 What it does
 
@@ -18,7 +30,8 @@
 | ⚙️ Background worker | 1 | MySQL-backed job queue: claim, retry, dead-letter, stale-lock recovery; comment auto-moderation |
 | 🎨 React SPA | 2 | Public reading, session restoration, writing/comments, admin taxonomy; same-origin served by Nginx |
 | 🔮 Semantic index | 3 | OpenAI-compatible embeddings, paragraph-aware chunking, Milvus COSINE vectors, reindex backfill |
-| 🤖 RAG Q&A | 4 | `/api/v1/ai/ask` — grounded answers with linked sources, MySQL-authorised retrieval, streaming-ready Chat |
+| 🤖 RAG Q&A | 4 | `/api/v1/ai/ask` — grounded answers with linked sources and MySQL-authorised retrieval |
+| ✅ Production closure | 5–5.1 | Real dependency integration, Playwright smoke, metrics, secrets, privacy gate, backup/restore and release drills |
 
 ---
 
@@ -73,21 +86,23 @@ Blog/
 
 ---
 
+<a id="quick-start"></a>
+
 ## 🚀 Quick start
 
 You need Docker Engine, Docker Compose v2 and GNU Make. All commands from the repo root.
 
-### 1. Create config
+### 1️⃣ Create config
 
 ```bash
 cp .env.example .env
 ```
 
-### 2. Replace secrets
+### 2️⃣ Replace secrets
 
 At minimum replace `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `REDIS_PASSWORD` and `JWT_SECRET` (≥ 32 bytes). Keep `MYSQL_DSN` in sync with the MySQL init values — it's a `go-sql-driver/mysql` DSN, not a `mysql://` URL.
 
-### 3. Launch
+### 3️⃣ Launch
 
 ```bash
 make compose-config   # validate without printing secrets
@@ -95,7 +110,7 @@ make up               # build & start the full stack
 make ps               # check service status
 ```
 
-### 4. Verify
+### 4️⃣ Verify
 
 ```bash
 curl -i http://127.0.0.1:8080/                 # SPA
@@ -104,9 +119,11 @@ curl -i http://127.0.0.1:8080/health/ready      # readiness
 curl -i http://127.0.0.1:8080/api/v1/posts      # public posts
 ```
 
-The startup sequence: MySQL/Redis healthy → one-shot migration → API + Worker up → Proxy starts.
+🔄 **Startup sequence:** MySQL/Redis healthy → one-shot migration → API + Worker up → Proxy starts.
 
 ---
+
+<a id="api"></a>
 
 ## 🔌 API overview
 
@@ -154,7 +171,7 @@ The RAG endpoint embeds your question, retrieves relevant chunks from Milvus, ve
 
 ---
 
-## 🫀 Health & degradation
+## 💚 Health & degradation
 
 - `/health/live` — process is responsive.
 - `/health/ready` — MySQL down → 503; Redis down → `degraded` but still 200 if MySQL is healthy.
@@ -187,6 +204,8 @@ Production and staging must never run `down`; investigate dirty state before tou
 
 ---
 
+<a id="development"></a>
+
 ## 🛠️ Dev & quality
 
 ```bash
@@ -203,7 +222,7 @@ make verify           # check + race detector + Compose validation
 make verify-integration # ephemeral MySQL/Redis: migrations, auth, limits, dual-worker SKIP LOCKED
 ```
 
-Dev port overlay:
+🧪 **Dev port overlay:**
 
 ```bash
 make dev-up           # exposes 127.0.0.1:8081 (API), :3306 (MySQL), :6379 (Redis)
@@ -228,6 +247,8 @@ Both modes need: `AI_EMBEDDING_BASE_URL`, `AI_EMBEDDING_API_KEY`, `AI_EMBEDDING_
 RAG additionally needs: `AI_CHAT_BASE_URL`, `AI_CHAT_API_KEY`, `AI_CHAT_MODEL`.
 
 ---
+
+<a id="security"></a>
 
 ## 🔒 Security & deploy notes
 
@@ -258,6 +279,8 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 
 ---
 
+<a id="roadmap"></a>
+
 ## 🗺️ Roadmap
 
 | Stage | What | Status |
@@ -272,4 +295,10 @@ docker compose --env-file .env -f deploy/compose.yaml down --volumes
 
 ---
 
-Built with ☕, Go, React, and a fondness for well-lit prose.
+<div align="center">
+
+☕ Built with **Go**, **React**, and a fondness for well-lit prose. ✨
+
+[⬆️ Back to top](#top)
+
+</div>
