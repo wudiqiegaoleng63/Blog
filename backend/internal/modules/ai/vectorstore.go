@@ -98,7 +98,11 @@ func (s *MilvusStore) Ensure(ctx context.Context) error {
 			return fmt.Errorf("ai: describe milvus collection: %w", err)
 		}
 		if err := s.createCollection(ctx); err != nil {
-			return err
+			// API and Worker can race to initialize a fresh collection. Re-describe
+			// before failing so an already-created compatible collection wins.
+			if describeErr := s.call(ctx, "/v2/vectordb/collections/describe", map[string]any{"collectionName": s.cfg.CollectionName}, &described); describeErr != nil || !collectionDimensionMatches(described.Data, s.dimensions) {
+				return err
+			}
 		}
 	} else if !collectionDimensionMatches(described.Data, s.dimensions) {
 		return fmt.Errorf("ai: Milvus collection embedding dimension does not match %d", s.dimensions)
@@ -142,15 +146,6 @@ func (s *MilvusStore) createCollection(ctx context.Context) error {
 }
 
 func (s *MilvusStore) ReplacePost(ctx context.Context, postID string, chunks []VectorChunk) error {
-	if err := s.Ensure(ctx); err != nil {
-		return err
-	}
-	if err := s.deletePostReady(ctx, postID); err != nil {
-		return err
-	}
-	if len(chunks) == 0 {
-		return nil
-	}
 	data := make([]map[string]any, len(chunks))
 	for index, chunk := range chunks {
 		if len(chunk.Embedding) != s.dimensions {
@@ -161,6 +156,15 @@ func (s *MilvusStore) ReplacePost(ctx context.Context, postID string, chunks []V
 			"content_version": chunk.ContentVersion, "chunk_index": chunk.Index,
 			"text": chunk.Text, "embedding": chunk.Embedding,
 		}
+	}
+	if err := s.Ensure(ctx); err != nil {
+		return err
+	}
+	if err := s.deletePostReady(ctx, postID); err != nil {
+		return err
+	}
+	if len(chunks) == 0 {
+		return nil
 	}
 	var response milvusResponse
 	if err := s.call(ctx, "/v2/vectordb/entities/upsert", map[string]any{"collectionName": s.cfg.CollectionName, "data": data}, &response); err != nil {
@@ -328,21 +332,26 @@ func boundedMilvusOperation(value string) string {
 	}
 }
 
+type milvusFieldDescription struct {
+	Name              string          `json:"name"`
+	FieldName         string          `json:"fieldName"`
+	ElementTypeParams map[string]any  `json:"elementTypeParams"`
+	TypeParams        map[string]any  `json:"typeParams"`
+	Params            json.RawMessage `json:"params"`
+}
+
 func collectionDimensionMatches(data json.RawMessage, dimensions int) bool {
 	var description struct {
+		Fields []milvusFieldDescription `json:"fields"`
 		Schema struct {
-			Fields []struct {
-				Name              string         `json:"name"`
-				FieldName         string         `json:"fieldName"`
-				ElementTypeParams map[string]any `json:"elementTypeParams"`
-				TypeParams        map[string]any `json:"typeParams"`
-			} `json:"fields"`
+			Fields []milvusFieldDescription `json:"fields"`
 		} `json:"schema"`
 	}
 	if json.Unmarshal(data, &description) != nil {
 		return false
 	}
-	for _, field := range description.Schema.Fields {
+	fields := append(description.Fields, description.Schema.Fields...)
+	for _, field := range fields {
 		if field.Name != "embedding" && field.FieldName != "embedding" {
 			continue
 		}
@@ -350,14 +359,39 @@ func collectionDimensionMatches(data json.RawMessage, dimensions int) bool {
 		if value == nil {
 			value = field.TypeParams["dim"]
 		}
+		if value == nil {
+			value = milvusParam(field.Params, "dim")
+		}
 		switch dim := value.(type) {
 		case string:
 			return dim == strconv.Itoa(dimensions)
 		case float64:
-			return int(dim) == dimensions
+			return dim == float64(dimensions)
 		}
 	}
 	return false
+}
+
+func milvusParam(raw json.RawMessage, key string) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) == nil {
+		return object[key]
+	}
+	var list []struct {
+		Key   string `json:"key"`
+		Value any    `json:"value"`
+	}
+	if json.Unmarshal(raw, &list) == nil {
+		for _, param := range list {
+			if param.Key == key {
+				return param.Value
+			}
+		}
+	}
+	return nil
 }
 
 func escapeMilvusString(value string) string {

@@ -1,0 +1,88 @@
+# Local/demo full-stack overlay with deterministic OpenAI-compatible Mock AI.
+# The mock service is internal-only and must not be used to evaluate answer quality.
+x-mock-ai-indexing-environment: &mock-ai-indexing-environment
+  AI_INDEXING_ENABLED: "true"
+  AI_EMBEDDING_BASE_URL: http://mock-ai:8080/v1
+  AI_EMBEDDING_API_KEY: mock-ai-test-only-key
+  AI_EMBEDDING_MODEL: blog-mock-embedding
+  AI_EMBEDDING_DIMENSIONS: "64"
+  AI_EMBEDDING_BATCH_SIZE: "32"
+  AI_EMBEDDING_MAX_RETRIES: "0"
+  MILVUS_COLLECTION_NAME: blog_chunks_mock_v1
+
+x-mock-ai-dependencies: &mock-ai-dependencies
+  mock-ai:
+    condition: service_healthy
+  milvus:
+    condition: service_healthy
+    required: true
+
+services:
+  mock-ai:
+    image: blog-mock-ai:local
+    build:
+      context: ./mock-ai
+      dockerfile: Dockerfile
+    environment:
+      MOCK_AI_API_KEY: mock-ai-test-only-key
+      MOCK_AI_PORT: "8080"
+      PYTHONDONTWRITEBYTECODE: "1"
+    networks:
+      - core
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    environment:
+      <<: *mock-ai-indexing-environment
+      AI_RAG_ENABLED: "true"
+      AI_CHAT_BASE_URL: http://mock-ai:8080/v1
+      AI_CHAT_API_KEY: mock-ai-test-only-key
+      AI_CHAT_MODEL: blog-mock-chat
+      AI_CHAT_MAX_RETRIES: "0"
+      RAG_SCORE_THRESHOLD: "0"
+    depends_on: *mock-ai-dependencies
+
+  worker:
+    environment:
+      <<: *mock-ai-indexing-environment
+      AI_RAG_ENABLED: "false"
+    depends_on: *mock-ai-dependencies
+
+  mock-ai-smoke:
+    image: blog-mock-ai:local
+    command: ["python3", "/app/smoke.py"]
+    environment:
+      BLOG_API_URL: http://api:8080
+      MOCK_AI_URL: http://mock-ai:8080
+      MOCK_AI_API_KEY: mock-ai-test-only-key
+      MOCK_AI_SMOKE_TIMEOUT_SECONDS: "120"
+    depends_on:
+      api:
+        condition: service_healthy
+      mock-ai:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    networks:
+      - core
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
